@@ -1,7 +1,13 @@
 # Sana's VidTrainPrep
 This is Sana's fork of VidTrainPrep, aiming to fix some bugs, improve usability/UX, translate French strings to English and adding various other minor useful functionality. 
 
-# VidTrainPrep
+The code is mostly done with Gemini as it is faster than doing it by hand, (and because Python isn't my speciality), so I can't guarantee that there won't be regressions or bugs. However, as I am activelly using the app, the bugs I notice, I will of course fix.
+
+If I don't notice them (because they are in the part of the app functionality I rarely use) feel free to report them, and I might take the time to fix them, but as I am primarily working on this for my own use, if your requests or bugs don't align with my needs, the chances are not high that I will take them on. Don't expect anything. I just wanted to share this in case anyone else needs a bit more from their training video prep app.
+
+You can see the changes/additions I've made to the app in the [Changelog](changelog.md).
+
+# Readme of the original VidTrainPrep:
 
 **VidTrainPrep** is a Python-based tool designed for clipping and preparing video data, specifically tailored for creating datasets for training video models like **LORA, Wan, or Hunyuan**. It allows for precise range selection, cropping, FPS conversion, and optional AI-powered description generation using the Gemini API.
 

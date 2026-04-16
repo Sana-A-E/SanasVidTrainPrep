@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QFileDialog, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QListWidget, QSlider, QGraphicsPixmapItem, QLineEdit, QSpinBox,
     QSizePolicy, QCheckBox, QListWidgetItem, QComboBox, QMessageBox, QDialog, QFormLayout, QDialogButtonBox,
-    QSpacerItem, QTabWidget # Added QTabWidget
+    QSpacerItem, QTabWidget, QToolButton # Added QToolButton
 )
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QIcon, QMouseEvent, QIntValidator
 from PyQt6.QtCore import Qt, QTimer, QRectF
@@ -21,7 +21,7 @@ from scripts.video_exporter import VideoExporter
 class VideoCropper(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("VidTrainPrep")
+        self.setWindowTitle("Sana's VidTrainPrep")
         self.setGeometry(100, 100, 900, 700) # Increased size slightly
         self.setWindowIcon(QIcon("icons/favicon.ico"))
         
@@ -154,7 +154,7 @@ class VideoCropper(QWidget):
         self.remove_range_button = QPushButton("Remove Range")
         self.remove_range_button.clicked.connect(self.remove_selected_range) # New method needed
         range_button_layout.addWidget(self.remove_range_button)
-        self.play_range_button = QPushButton("Preview Range (Z)") # New Button
+        self.play_range_button = QPushButton("Preview Range (Z/Y)") # New Button
         self.play_range_button.clicked.connect(self.toggle_play_selected_range) # New method
         range_button_layout.addWidget(self.play_range_button)
         range_layout.addLayout(range_button_layout)
@@ -201,7 +201,7 @@ class VideoCropper(QWidget):
 
         # Add Attribution Label
         attribution_label = QLabel(
-            "Based on <a href=\"https://github.com/Tr1dae/HunyClip\" style=\"color: #88C0D0;\"><span style=\"color: #88C0D0;\">HunyClip by Tr1dae</span></a>"
+            "Based on <a href=\"https://github.com/lovisdotio/VidTrainPrep\" style=\"color: #88C0D0;\"><span style=\"color: #88C0D0;\">VidTrainPrep by lovisdotio</span></a> and <a href=\"https://github.com/Tr1dae/HunyClip\" style=\"color: #88C0D0;\"><span style=\"color: #88C0D0;\">HunyClip by Tr1dae</span></a>"
         )
         attribution_label.setOpenExternalLinks(True)
         attribution_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -215,7 +215,7 @@ class VideoCropper(QWidget):
         
         # RIGHT PANEL
         right_panel = QVBoxLayout()
-        keybindings_label = QLabel("Left/Right: Prev/Next Frame | Shift+Left/Right: Prev/Next Second | Drag: Crop | Z: Preview Range | X: Next Video | C: Play/Pause | Q/W: Nudge End | A/S: Nudge Start") # Updated shortcuts
+        keybindings_label = QLabel("Left/Right: Prev/Next Frame | Shift+Left/Right: Prev/Next Second | Drag: Crop | Z/Y: Preview Range | X: Next Video | C: Play/Pause | Q/W: Nudge End | A/S: Nudge Start") # Updated shortcuts
         keybindings_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         keybindings_label.setStyleSheet("font-size: 11px; color: #ECEFF4;") # Smaller font
         right_panel.addWidget(keybindings_label)
@@ -310,10 +310,30 @@ class VideoCropper(QWidget):
         self.step_backward_button.setFixedWidth(80)
         frame_control_layout.addWidget(self.step_backward_button)
 
+        self.jump_start_frame_button = QPushButton("Start Frame")
+        self.jump_start_frame_button.setToolTip("Navigate frame slider to the current range's start frame")
+        self.jump_start_frame_button.clicked.connect(self.jump_to_range_start)
+        frame_control_layout.addWidget(self.jump_start_frame_button)
+
+        self.update_start_f_button = QPushButton("Update Start F.")
+        self.update_start_f_button.setToolTip("Changes Start Frame of currently selected Range to current frame")
+        self.update_start_f_button.clicked.connect(self.set_range_start_to_current)
+        frame_control_layout.addWidget(self.update_start_f_button)
+
         self.current_frame_label = QLabel("Frame: - / -")
         self.current_frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.current_frame_label.setStyleSheet("font-size: 12px; color: #C0C0C0;")
         frame_control_layout.addWidget(self.current_frame_label, 1)
+
+        self.update_end_f_button = QPushButton("Update End F.")
+        self.update_end_f_button.setToolTip("Changes the End Frame of currently selected Range to current frame")
+        self.update_end_f_button.clicked.connect(self.set_range_end_to_current)
+        frame_control_layout.addWidget(self.update_end_f_button)
+
+        self.jump_end_frame_button = QPushButton("End Frame")
+        self.jump_end_frame_button.setToolTip("Navigate frame slider to the current range's end frame")
+        self.jump_end_frame_button.clicked.connect(self.jump_to_range_end)
+        frame_control_layout.addWidget(self.jump_end_frame_button)
 
         self.step_forward_button = QPushButton("Frame >")
         self.step_forward_button.setToolTip("Go to Next Frame (Shortcut: Right Arrow)")
@@ -321,9 +341,9 @@ class VideoCropper(QWidget):
         self.step_forward_button.setFixedWidth(80)
         frame_control_layout.addWidget(self.step_forward_button)
 
-        frame_control_layout.addWidget(QLabel(" Go to Frame:"))
+        frame_control_layout.addWidget(QLabel(" Go to: "))
         self.goto_frame_input = QLineEdit()
-        self.goto_frame_input.setFixedWidth(70)
+        self.goto_frame_input.setFixedWidth(50)
         self.goto_frame_input.setValidator(QIntValidator(0, 9999999))
         self.goto_frame_input.setToolTip("Enter frame number and press Enter")
         self.goto_frame_input.returnPressed.connect(self._goto_frame)
@@ -360,6 +380,13 @@ class VideoCropper(QWidget):
 
         # Tabs Layout
         self.tabs = QTabWidget()
+        
+        self.minimize_tabs_btn = QToolButton()
+        self.minimize_tabs_btn.setArrowType(Qt.ArrowType.UpArrow)
+        self.minimize_tabs_btn.setCheckable(True)
+        self.minimize_tabs_btn.setToolTip("Toggle Tabs Visibility")
+        self.minimize_tabs_btn.clicked.connect(self.toggle_tabs_visibility)
+        self.tabs.setCornerWidget(self.minimize_tabs_btn)
         
         # Tab 1: Crop
         crop_tab = QWidget()
@@ -526,6 +553,48 @@ class VideoCropper(QWidget):
         #     #         item.setCheckState(Qt.CheckState.Checked)
         #     #      break
 
+    def toggle_tabs_visibility(self, checked):
+        if checked:
+            self.minimize_tabs_btn.setArrowType(Qt.ArrowType.DownArrow)
+            for i in range(self.tabs.count()):
+                self.tabs.widget(i).setVisible(False)
+            self.tabs.setMaximumHeight(self.tabs.tabBar().height())
+        else:
+            self.minimize_tabs_btn.setArrowType(Qt.ArrowType.UpArrow)
+            for i in range(self.tabs.count()):
+                self.tabs.widget(i).setVisible(True)
+            self.tabs.setMaximumHeight(16777215)
+
+    def jump_to_range_start(self):
+        if not self.current_selected_range_id: return
+        try:
+            start_frame = int(self.start_frame_input.text())
+            if self.frame_count > 0:
+                self.editor.update_frame_display(start_frame)
+                self.slider.setValue(start_frame)
+        except ValueError: pass
+
+    def jump_to_range_end(self):
+        if not self.current_selected_range_id: return
+        try:
+            end_frame = int(self.end_frame_input.text())
+            if self.frame_count > 0:
+                self.editor.update_frame_display(end_frame)
+                self.slider.setValue(end_frame)
+        except ValueError: pass
+
+    def set_range_start_to_current(self):
+        if not self.current_selected_range_id: return
+        current_frame = self.slider.value()
+        self.start_frame_input.setText(str(current_frame))
+        self.update_start_frame_input()
+
+    def set_range_end_to_current(self):
+        if not self.current_selected_range_id: return
+        current_frame = self.slider.value()
+        self.end_frame_input.setText(str(current_frame))
+        self.update_end_frame_input()
+
     def keyPressEvent(self, event):
         key = event.key()
         modifiers = event.modifiers()
@@ -554,7 +623,7 @@ class VideoCropper(QWidget):
              else:
                 super().keyPressEvent(event)
 
-        elif key == Qt.Key.Key_Z: # Preview selected range
+        elif key == Qt.Key.Key_Z or key == Qt.Key.Key_Y: # Preview selected range
             # No change needed, handled by button connection now, but keep shortcut
             self.editor.toggle_loop_playback()
             event.accept()
