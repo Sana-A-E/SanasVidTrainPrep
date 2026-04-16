@@ -30,25 +30,25 @@ class CustomGraphicsScene(QGraphicsScene):
                     self.crop_item.update() # Request a generic update
 
     def mousePressEvent(self, event):
-        # Si un crop existe déjà
+        # If a crop already exists
         if self.crop_item:
-            # Vérifier si le clic est proche du crop existant
-            tolerance = 10  # tolérance en pixels pour la sélection
+            # Check if the click is close to the existing crop
+            tolerance = 10  # Selection tolerance in pixels
             region_scene_rect = self.crop_item.sceneBoundingRect()
             inflated_rect = region_scene_rect.adjusted(-tolerance, -tolerance, tolerance, tolerance)
             
             if inflated_rect.contains(event.scenePos()):
-                # Transférer l'événement à l'élément de crop
+                # Transfer the event to the crop item
                 self.crop_item.mousePressEvent(event)
                 event.accept()
                 return
             else:
-                # Si le clic est loin, supprimer le crop existant
+                # If the click is far, remove the existing crop
                 self.removeItem(self.crop_item)
                 self.crop_item = None
-                # Continuer pour créer un nouveau crop
+                # Continue to create a new crop
 
-        # Commencer à créer un nouveau crop
+        # Start creating a new crop
         self.start_point = event.scenePos()
         self.temp_rect_item = self.addRect(QRectF(self.start_point, self.start_point),
                                          QPen(QColor(255, 0, 0), 2),
@@ -58,19 +58,19 @@ class CustomGraphicsScene(QGraphicsScene):
     def mouseMoveEvent(self, event):
         scene_pos = event.scenePos()
         
-        # Si un crop existe et que la souris est à l'intérieur
+        # If a crop exists and the mouse is inside
         if self.crop_item and self.crop_item.contains(scene_pos):
-            # Transférer l'événement à l'élément de crop
+            # Transfer the event to the crop item
             self.crop_item.mouseMoveEvent(event)
             event.accept()
             return
 
-        # Si nous dessinons un nouveau crop
+        # If we are drawing a new crop
         if self.start_point and self.temp_rect_item:
             current_point = scene_pos
             rect = QRectF(self.start_point, current_point).normalized()
 
-            # Appliquer la contrainte de ratio d'aspect si définie
+            # Apply aspect ratio constraint if defined
             if self.aspect_ratio is not None:
                 current_width = rect.width()
                 current_height = rect.height() if rect.height() != 0 else 1
@@ -79,7 +79,7 @@ class CustomGraphicsScene(QGraphicsScene):
                 else:
                     rect.setHeight(current_width / self.aspect_ratio)
 
-            # Limiter le rectangle aux limites de la scène
+            # Limit the rectangle to scene boundaries
             scene_rect = self.sceneRect()
             if rect.right() > scene_rect.right():
                 rect.setRight(scene_rect.right())
@@ -92,7 +92,7 @@ class CustomGraphicsScene(QGraphicsScene):
 
             self.temp_rect_item.setRect(rect)
             
-            # Notifier le parent des mises à jour en cours
+            # Notify parent of ongoing updates
             if hasattr(self.parent_widget, "crop_rect_updating"):
                 self.parent_widget.crop_rect_updating(rect)
             event.accept()
@@ -101,14 +101,14 @@ class CustomGraphicsScene(QGraphicsScene):
 
     def mouseReleaseEvent(self, event):
         if self.start_point and self.temp_rect_item:
-            # Finaliser le nouveau crop
+            # Finalize the new crop
             rect = self.temp_rect_item.rect().normalized()
             self.removeItem(self.temp_rect_item)
             self.temp_rect_item = None
             self.start_point = None
 
             if rect.width() >= 20 and rect.height() >= 20:
-                # Créer le nouveau crop interactif
+                # Create the new interactive crop
                 self.crop_item = InteractiveCropRegion(rect, aspect_ratio=self.aspect_ratio)
                 self.addItem(self.crop_item)
                 if hasattr(self.parent_widget, "crop_rect_finalized"):

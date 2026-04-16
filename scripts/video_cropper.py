@@ -371,8 +371,8 @@ class VideoCropper(QWidget):
         self.submit_button.clicked.connect(self.exporter.export_videos) # export_videos needs update
         right_panel.addWidget(self.submit_button)
         
-        # Nouveau bouton pour exporter l'image de la frame courante
-        self.export_range_start_frames_button = QPushButton("Exporter 1ère Frame des Ranges (Images)")
+        # New button to export the first frame of ranges
+        self.export_range_start_frames_button = QPushButton("Export 1st Frame of Ranges (Images)")
         self.export_range_start_frames_button.clicked.connect(self.trigger_export_range_start_frames)
         right_panel.addWidget(self.export_range_start_frames_button)
         
@@ -1084,7 +1084,7 @@ class VideoCropper(QWidget):
 
     def trigger_export_range_start_frames(self):
         """
-        Déclenche l'export de la première frame de chaque range des vidéos sélectionnées.
+        Triggers the export of the first frame of each range for the selected videos.
         """
         # print(f"[DEBUG VideoCropper] Current frame number from attribute: {getattr(self, 'current_frame_number', 'N/A')}")
         # frame_to_export = 0 # Default
@@ -1094,14 +1094,14 @@ class VideoCropper(QWidget):
         # else:
         #     print("[DEBUG VideoCropper] Slider not found.")
             
-        # is_mode_image_active = getattr(self, 'is_image_mode', False) # Ce flag n'est plus pertinent ici
+        # is_mode_image_active = getattr(self, 'is_image_mode', False) # This flag is no longer relevant here
 
         if hasattr(self, 'exporter'):
-            # Indiquer à l'exporter de traiter les ranges des vidéos sélectionnées
-            # La méthode de l'exporter s'occupera de trouver les start_frames, etc.
+            # Tell the exporter to process the ranges of the selected videos
+            # The exporter method will find start_frames, etc.
             self.exporter.export_first_frames_of_ranges_as_images()
         else:
-            QMessageBox.warning(self, "Erreur", "Composant d'exportation non initialisé.")
+            QMessageBox.warning(self, "Error", "Exporter component not initialized.")
 
 # --- FPS Conversion Dialog --- 
 class ConvertFpsDialog(QDialog):

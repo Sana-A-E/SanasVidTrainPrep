@@ -621,16 +621,16 @@ class VideoExporter:
 
     def export_first_frames_of_ranges_as_images(self):
         """
-        Exporte la première frame de chaque range des vidéos sélectionnées (cochées).
-        Applique le crop du range et le fixed resolution si actifs.
-        Génère une description Gemini pour chaque image.
+        Exports the first frame of each range for the selected (checked) videos.
+        Applies range crop and fixed resolution if active.
+        Generates a Gemini description for each image.
         """
         main_app = self.main_app
         output_folder_images = os.path.join(main_app.folder_path, "exported_images")
         os.makedirs(output_folder_images, exist_ok=True)
-        print(f"--- Démarrage de l'export des premières frames des ranges (images) vers {output_folder_images} ---")
+        print(f"--- Starting export of first frames for ranges (images) to {output_folder_images} ---")
 
-        # 1. Récupérer les items à exporter (logique similaire à export_videos)
+        # 1. Collect items to export (logic similar to export_videos)
         items_to_export = []
         for i in range(main_app.video_list.count()):
             item = main_app.video_list.item(i)
@@ -640,13 +640,13 @@ class VideoExporter:
                     continue
                 video_entry = main_app.video_files[i]
                 original_path = video_entry.get("original_path")
-                display_name = video_entry.get("display_name") # Utilisé pour le nom de fichier
+                display_name = video_entry.get("display_name") # Used for filename
                 if not original_path or not os.path.exists(original_path):
                     print(f"⚠️ Skipping invalid video entry: {display_name} (Path: {original_path})")
                     continue
                 video_ranges = main_app.video_data.get(original_path, {}).get("ranges", [])
                 if not video_ranges:
-                    print(f"ℹ️ Pas de ranges définis pour la vidéo sélectionnée : {display_name}. Skip.")
+                    print(f"ℹ️ No ranges defined for selected video: {display_name}. Skipping.")
                     continue
                 items_to_export.append({
                     "original_path": original_path,
@@ -655,22 +655,22 @@ class VideoExporter:
                 })
 
         if not items_to_export:
-            QMessageBox.information(main_app, "Rien à exporter", "Veuillez cocher au moins une vidéo avec des ranges définis.")
+            QMessageBox.information(main_app, "Nothing to Export", "Please check at least one video with defined ranges.")
             return
 
-        # 2. Traiter chaque vidéo et ses ranges
+        # 2. Process each video and its ranges
         total_images_exported = 0
         for video_info in items_to_export:
             original_path = video_info["original_path"]
             base_video_name, _ = os.path.splitext(video_info["display_name"])
             ranges = video_info["ranges"]
-            print(f"Traitement de la source : {video_info['display_name']} ({len(ranges)} ranges)")
+            print(f"Processing Source: {video_info['display_name']} ({len(ranges)} ranges)")
 
             cap = None
             try:
                 cap = cv2.VideoCapture(original_path)
                 if not cap.isOpened():
-                    print(f"❌ ERREUR : Impossible d'ouvrir la source vidéo {original_path}. Skip.")
+                    print(f"❌ ERROR: Could not open video source {original_path}. Skipping.")
                     continue
 
                 for range_data in ranges:
@@ -683,29 +683,29 @@ class VideoExporter:
                     ret, frame = cap.read()
 
                     if not ret or frame is None:
-                        print(f"    ⚠️ Impossible de lire la frame {start_frame} pour le range {range_idx_display}. Skip.")
+                        print(f"    ⚠️ Could not read frame {start_frame} for range {range_idx_display}. Skipping.")
                         continue
                     
-                    img_to_process = frame.copy() # Travailler sur une copie
+                    img_to_process = frame.copy() # Work on a copy
 
-                    # Appliquer le crop du range s'il existe
+                    # Apply range crop if it exists
                     if crop_tuple:
                         x, y, w, h = crop_tuple
                         current_h_img, current_w_img = img_to_process.shape[:2]
                         if x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > current_w_img or y + h > current_h_img:
-                            print(f"    [DEBUG Exporter] Crop {crop_tuple} invalide pour image de {current_w_img}x{current_h_img}. Crop ignoré.")
+                            print(f"    [DEBUG Exporter] Invalid crop {crop_tuple} for image of {current_w_img}x{current_h_img}. Crop ignored.")
                         else:
                             img_to_process = img_to_process[y:y+h, x:x+w]
-                            print(f"    [DEBUG Exporter] Image croppée à {w}x{h} depuis ({x},{y}) pour range {range_idx_display}")
+                            print(f"    [DEBUG Exporter] Image cropped to {w}x{h} from ({x},{y}) for range {range_idx_display}")
                     
-                    # Appliquer fixed resolution si actif globalement
+                    # Apply fixed resolution if active globally
                     fixed_w = getattr(main_app, 'fixed_export_width', None)
                     fixed_h = getattr(main_app, 'fixed_export_height', None)
                     if fixed_w and fixed_h:
                         img_to_process = cv2.resize(img_to_process, (fixed_w, fixed_h), interpolation=cv2.INTER_AREA)
-                        print(f"    [DEBUG Exporter] Image redimensionnée à {fixed_w}x{fixed_h} pour range {range_idx_display}")
+                        print(f"    [DEBUG Exporter] Image resized to {fixed_w}x{fixed_h} for range {range_idx_display}")
 
-                    # Construire le nom de fichier de sortie
+                    # Build output filename
                     image_base_name = f"{base_video_name}_range{range_idx_display}_frame{start_frame}"
                     count = 0
                     temp_out_path = os.path.join(output_folder_images, f"{image_base_name}.png")
@@ -716,39 +716,39 @@ class VideoExporter:
 
                     try:
                         cv2.imwrite(out_path_image, img_to_process)
-                        print(f"    ✅ Image exportée : {os.path.basename(out_path_image)}")
+                        print(f"    ✅ Image exported: {os.path.basename(out_path_image)}")
                         total_images_exported += 1
 
-                        # Générer la description Gemini
+                        # Generate Gemini description
                         if getattr(main_app, 'gemini_caption_checkbox', None) and main_app.gemini_caption_checkbox.isChecked():
                             if not self.gemini_model and not self._configure_gemini():
-                                print("    ⚠️ Gemini non configuré, impossible de générer la description.")
-                                self.write_caption(out_path_image) # Ecrire simple caption si échec config gemini
+                                print("    ⚠️ Gemini not configured, cannot generate description.")
+                                self.write_caption(out_path_image) # Write simple caption if Gemini config fails
                             else:
                                 caption = self.generate_gemini_caption(out_path_image)
                                 if caption:
                                     self.write_caption(out_path_image, caption_content=caption)
                                 else:
-                                    print(f"    ⚠️ Échec de la génération de description Gemini pour {os.path.basename(out_path_image)}.")
+                                    print(f"    ⚠️ Gemini description generation failed for {os.path.basename(out_path_image)}.")
                                     self.write_caption(out_path_image) # Fallback
                         else:
-                            self.write_caption(out_path_image) # Ecrire simple caption
+                            self.write_caption(out_path_image) # Write simple caption
                     except Exception as e_write:
-                        print(f"    ❌ ERREUR lors de l'écriture de l'image {os.path.basename(out_path_image)}: {e_write}")
+                        print(f"    ❌ ERROR during image write {os.path.basename(out_path_image)}: {e_write}")
 
             except Exception as e_video_proc:
-                print(f"❌ ERREUR lors du traitement de la vidéo {video_info['display_name']}: {e_video_proc}")
+                print(f"❌ ERROR while processing video {video_info['display_name']}: {e_video_proc}")
             finally:
                 if cap and cap.isOpened():
                     cap.release()
-                    print(f"   Source vidéo relâchée : {video_info['display_name']}")
+                    print(f"   Released video source: {video_info['display_name']}")
         
-        print(f"--- Export des premières frames terminé. {total_images_exported} images exportées. ---")
-        QMessageBox.information(main_app, "Export Terminé", f"{total_images_exported} images (premières frames des ranges) ont été exportées.")
+        print(f"--- Export of first frames complete. {total_images_exported} images exported. ---")
+        QMessageBox.information(main_app, "Export Complete", f"{total_images_exported} images (first frames of ranges) have been exported.")
 
     @staticmethod
     def qimage_to_cv(qimg):
-        """Convertit un QImage en image OpenCV (numpy array)"""
+        """Converts a QImage to an OpenCV image (numpy array)"""
         qimg = qimg.convertToFormat(4) # QImage.Format.Format_RGB32
         width = qimg.width()
         height = qimg.height()
