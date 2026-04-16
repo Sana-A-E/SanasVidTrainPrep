@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QFileDialog, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QListWidget, QSlider, QGraphicsPixmapItem, QLineEdit, QSpinBox,
     QSizePolicy, QCheckBox, QListWidgetItem, QComboBox, QMessageBox, QDialog, QFormLayout, QDialogButtonBox,
-    QSpacerItem # Added QSpacerItem
+    QSpacerItem, QTabWidget # Added QTabWidget
 )
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QIcon, QMouseEvent, QIntValidator
 from PyQt6.QtCore import Qt, QTimer, QRectF
@@ -60,6 +60,7 @@ class VideoCropper(QWidget):
 
         # Caption properties (unchanged)
         self.simple_caption = ""
+        self.last_changed_sync = 'duration'
 
         # UI widgets (some changes)
         self.video_list = QListWidget() # Main list of videos/duplicates
@@ -122,19 +123,24 @@ class VideoCropper(QWidget):
         self.clip_range_list.itemClicked.connect(self.select_range) # New method needed
         range_layout.addWidget(self.clip_range_list)
 
-        # Range Start/End Inputs -> Start/Duration Inputs
+        # Range Start/End/Duration Inputs
         range_input_layout = QHBoxLayout()
-        range_input_layout.addWidget(QLabel("Start Frame:")) # Changed label
+        range_input_layout.addWidget(QLabel("Start Frame:"))
         self.start_frame_input = QLineEdit("0")
-        self.start_frame_input.setReadOnly(True) # Make Start Frame read-only
-        # self.start_frame_input.setValidator(QIntValidator(0, 9999999))
-        # self.start_frame_input.editingFinished.connect(self.update_range_from_inputs) # No longer directly edited
+        self.start_frame_input.setValidator(QIntValidator(0, 9999999))
+        self.start_frame_input.editingFinished.connect(self.update_start_frame_input)
         range_input_layout.addWidget(self.start_frame_input)
 
-        range_input_layout.addWidget(QLabel("Duration (f):")) # Changed label
-        self.duration_input = QLineEdit("60") # Default duration
-        self.duration_input.setValidator(QIntValidator(1, 99999)) # Duration must be at least 1
-        self.duration_input.editingFinished.connect(self.update_range_duration_from_input) # Renamed method
+        range_input_layout.addWidget(QLabel("End Frame:"))
+        self.end_frame_input = QLineEdit("60")
+        self.end_frame_input.setValidator(QIntValidator(1, 9999999))
+        self.end_frame_input.editingFinished.connect(self.update_end_frame_input)
+        range_input_layout.addWidget(self.end_frame_input)
+
+        range_input_layout.addWidget(QLabel("Duration (f):"))
+        self.duration_input = QLineEdit("60")
+        self.duration_input.setValidator(QIntValidator(1, 99999))
+        self.duration_input.editingFinished.connect(self.update_range_duration_from_input)
         range_input_layout.addWidget(self.duration_input)
         range_layout.addLayout(range_input_layout)
 
@@ -261,31 +267,28 @@ class VideoCropper(QWidget):
         self.fixed_height_input.setPlaceholderText("Height")
         self.fixed_height_input.setValidator(QIntValidator(1, 7680, self))
         fixed_res_inputs_layout.addWidget(self.fixed_height_input)
-        resolution_aspect_layout.addRow(fixed_res_inputs_layout) # Add QHBoxLayout to QFormLayout row
+        resolution_aspect_layout.addRow(fixed_res_inputs_layout)
 
         fixed_res_buttons_layout = QHBoxLayout()
         self.apply_fixed_res_button = QPushButton("Apply Fixed Res")
         fixed_res_buttons_layout.addWidget(self.apply_fixed_res_button)
         self.clear_fixed_res_button = QPushButton("Clear Fixed Res")
         fixed_res_buttons_layout.addWidget(self.clear_fixed_res_button)
-        resolution_aspect_layout.addRow(fixed_res_buttons_layout) # Add QHBoxLayout to QFormLayout row
+        resolution_aspect_layout.addRow(fixed_res_buttons_layout)
         
         self.fixed_res_status_label = QLabel("Fixed resolution: Deactivated")
         resolution_aspect_layout.addRow(self.fixed_res_status_label)
 
-        right_panel.addWidget(resolution_aspect_group) # Add the whole group to the right panel
-        
+        self.apply_fixed_res_button.clicked.connect(lambda: self.toggle_fixed_resolution_mode(True))
+        self.clear_fixed_res_button.clicked.connect(lambda: self.toggle_fixed_resolution_mode(False))
+
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setEnabled(False)
         self.slider.sliderMoved.connect(self.editor.scrub_video)
         self.slider.valueChanged.connect(self.editor.scrub_video)
         right_panel.addWidget(self.slider)
-        
-        # Connect fixed resolution buttons here as they are part of right_panel
-        self.apply_fixed_res_button.clicked.connect(lambda: self.toggle_fixed_resolution_mode(True))
-        self.clear_fixed_res_button.clicked.connect(lambda: self.toggle_fixed_resolution_mode(False))
 
-        self.clip_length_label = QLabel("Clip Length: 0 frames | Video Length: 0 frames") # Show clip and total length
+        self.clip_length_label = QLabel("Clip Length: 0 frames | Video Length: 0 frames")
         right_panel.addWidget(self.clip_length_label)
         
         self.thumbnail_label = QWidget(self)
@@ -301,80 +304,89 @@ class VideoCropper(QWidget):
         # --- NEW: Frame Control Layout ---
         frame_control_layout = QHBoxLayout()
 
-        # Prev Frame Button
         self.step_backward_button = QPushButton("< Frame")
         self.step_backward_button.setToolTip("Go to Previous Frame (Shortcut: Left Arrow)")
         self.step_backward_button.clicked.connect(self._step_frame_backward)
-        self.step_backward_button.setFixedWidth(80) # Optional fixed width
+        self.step_backward_button.setFixedWidth(80)
         frame_control_layout.addWidget(self.step_backward_button)
 
-        # Current Frame Label (NEW) - Give it expanding space
         self.current_frame_label = QLabel("Frame: - / -")
         self.current_frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.current_frame_label.setStyleSheet("font-size: 12px; color: #C0C0C0;") # Style
-        frame_control_layout.addWidget(self.current_frame_label, 1) # Expanding
+        self.current_frame_label.setStyleSheet("font-size: 12px; color: #C0C0C0;")
+        frame_control_layout.addWidget(self.current_frame_label, 1)
 
-        # Next Frame Button
         self.step_forward_button = QPushButton("Frame >")
         self.step_forward_button.setToolTip("Go to Next Frame (Shortcut: Right Arrow)")
         self.step_forward_button.clicked.connect(self._step_frame_forward)
-        self.step_forward_button.setFixedWidth(80) # Optional fixed width
+        self.step_forward_button.setFixedWidth(80)
         frame_control_layout.addWidget(self.step_forward_button)
 
-        # Go to Frame Input
         frame_control_layout.addWidget(QLabel(" Go to Frame:"))
         self.goto_frame_input = QLineEdit()
-        self.goto_frame_input.setFixedWidth(70) # Optional fixed width
-        self.goto_frame_input.setValidator(QIntValidator(0, 9999999)) # Allow large frame numbers
+        self.goto_frame_input.setFixedWidth(70)
+        self.goto_frame_input.setValidator(QIntValidator(0, 9999999))
         self.goto_frame_input.setToolTip("Enter frame number and press Enter")
-        self.goto_frame_input.returnPressed.connect(self._goto_frame) # Connect return key
+        self.goto_frame_input.returnPressed.connect(self._goto_frame)
         frame_control_layout.addWidget(self.goto_frame_input)
 
-        right_panel.addLayout(frame_control_layout) # Add this layout below the slider
+        right_panel.addLayout(frame_control_layout)
 
-        # --- Reorganized Export Settings & Gemini Inputs (Vertical) ---
+        # --- Reorganized Export Settings & Gemini Inputs (Vertical) into a Widget ---
         export_options_group = QWidget()
         export_options_layout = QFormLayout(export_options_group)
-        export_options_layout.setContentsMargins(0, 10, 0, 5) # Add some top margin
+        export_options_layout.setContentsMargins(0, 10, 0, 5)
 
-        # Filename Prefix
         self.prefix_input = QLineEdit()
         self.prefix_input.setPlaceholderText("Replace original name (Optional)")
         self.prefix_input.textChanged.connect(lambda text: setattr(self, "export_prefix", text))
         export_options_layout.addRow("Filename Prefix:", self.prefix_input)
 
-        # Trigger Word
         self.trigger_word_input = QLineEdit()
         self.trigger_word_input.setPlaceholderText("Prepend to captions (Optional)")
         export_options_layout.addRow("Trigger Word:", self.trigger_word_input)
 
-        # Character Name
         self.character_name_input = QLineEdit()
         self.character_name_input.setPlaceholderText("Subject name for Gemini (Optional)")
         export_options_layout.addRow("Character Name:", self.character_name_input)
         
-        # Gemini API Key
         self.gemini_api_key_input = QLineEdit()
         self.gemini_api_key_input.setPlaceholderText("Enter Gemini API Key Here")
         self.gemini_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         export_options_layout.addRow("Gemini API Key:", self.gemini_api_key_input)
         
-        # Gemini Checkbox
-        self.gemini_caption_checkbox = QCheckBox("Generate Gemini Caption/Description") # Text updated
+        self.gemini_caption_checkbox = QCheckBox("Generate Gemini Caption/Description")
         self.gemini_caption_checkbox.setChecked(False)
-        # self.gemini_caption_checkbox.stateChanged.connect(self.toggle_image_export_based_on_gemini) # Connection removed previously
-        export_options_layout.addRow("", self.gemini_caption_checkbox) # Add checkbox without a label on the left
+        export_options_layout.addRow("", self.gemini_caption_checkbox)
 
-        right_panel.addWidget(export_options_group)
-
-        self.submit_button = QPushButton("Export Selected Video(s)") # Text updated
-        self.submit_button.clicked.connect(self.exporter.export_videos) # export_videos needs update
-        right_panel.addWidget(self.submit_button)
+        # Tabs Layout
+        self.tabs = QTabWidget()
         
-        # New button to export the first frame of ranges
+        # Tab 1: Crop
+        crop_tab = QWidget()
+        crop_layout = QVBoxLayout(crop_tab)
+        crop_layout.addWidget(resolution_aspect_group)
+        crop_layout.addStretch(1)
+        self.tabs.addTab(crop_tab, "Crop")
+        
+        # Tab 2: Captioning
+        caption_tab = QWidget()
+        caption_layout = QVBoxLayout(caption_tab)
+        caption_layout.addWidget(export_options_group)
+        caption_layout.addStretch(1)
+        self.tabs.addTab(caption_tab, "Captioning")
+        
+        right_panel.addWidget(self.tabs)
+
+        export_buttons_layout = QHBoxLayout()
+        self.submit_button = QPushButton("Export Selected Video(s)")
+        self.submit_button.clicked.connect(self.exporter.export_videos)
+        export_buttons_layout.addWidget(self.submit_button)
+        
         self.export_range_start_frames_button = QPushButton("Export 1st Frame of Ranges (Images)")
         self.export_range_start_frames_button.clicked.connect(self.trigger_export_range_start_frames)
-        right_panel.addWidget(self.export_range_start_frames_button)
+        export_buttons_layout.addWidget(self.export_range_start_frames_button)
+        
+        right_panel.addLayout(export_buttons_layout)
         
         main_layout.addLayout(right_panel, 3)
     
@@ -668,8 +680,9 @@ class VideoCropper(QWidget):
     def select_range(self, item):
         if not item: # Can happen if list is cleared
             self.current_selected_range_id = None
-            self.start_frame_input.setText("-") # Indicate no selection
+            self.start_frame_input.setText("-")
             self.duration_input.setText("-")
+            self.end_frame_input.setText("-")
             self.clear_crop_region_controller()
             if hasattr(self, 'goto_frame_input'): self.goto_frame_input.clear() # Clear goto input
             return
@@ -689,6 +702,7 @@ class VideoCropper(QWidget):
             self.start_frame_input.setText(str(start_frame))
             duration = end_frame - start_frame
             self.duration_input.setText(str(duration))
+            self.end_frame_input.setText(str(end_frame))
             self._load_range_crop(range_data) # Load visual crop
             if self.frame_count > 0:
                  # Update frame display first
@@ -707,61 +721,99 @@ class VideoCropper(QWidget):
             self.current_selected_range_id = None
             # Reset UI elements if data not found
             self.start_frame_input.setText("0")
-            self.duration_input.setText("60") # Default duration
+            self.duration_input.setText("60")
+            self.end_frame_input.setText("60")
             self.clear_crop_region_controller()
             if hasattr(self, 'goto_frame_input'): self.goto_frame_input.clear() # Clear goto input
 
-    def update_range_duration_from_input(self): # Renamed method
-        if not self.current_selected_range_id:
-             # Don't update if no range is selected (e.g., during initial load)
-             return
-             
+    def update_start_frame_input(self):
+        if not self.current_selected_range_id: return
         range_data = self.find_range_by_id(self.current_selected_range_id)
-        if not range_data:
-            print(f"⚠️ Cannot update: Range data not found for {self.current_selected_range_id}")
-            return
-
+        if not range_data: return
         try:
-            # Read start frame (read-only) and new duration
-            start_frame = int(self.start_frame_input.text())
-            new_duration = int(self.duration_input.text())
+            new_start = int(self.start_frame_input.text())
+            if new_start < 0:
+                new_start = 0
             
-            # Validation
-            if new_duration <= 0:
-                 print("⚠️ Duration must be positive. Reverting.")
-                 old_duration = range_data.get("end", start_frame) - range_data.get("start", start_frame)
-                 self.duration_input.setText(str(old_duration))
-                 return
+            if self.last_changed_sync == 'duration':
+                current_duration = int(self.duration_input.text())
+                new_end = min(new_start + current_duration, self.frame_count)
+                if new_end <= new_start:
+                    new_end = min(new_start + 1, self.frame_count)
+            else:
+                new_end = int(self.end_frame_input.text())
+                if new_end <= new_start:
+                    new_end = min(new_start + 1, self.frame_count)
             
-            new_end = min(start_frame + new_duration, self.frame_count) # Calculate new end, clamp
-            if new_end <= start_frame: # If clamping results in invalid range
-                print("⚠️ Duration too short or start frame too near end. Reverting.")
-                old_duration = range_data.get("end", start_frame) - range_data.get("start", start_frame)
-                self.duration_input.setText(str(old_duration))
-                return
-                   
-            # Update input fields after validation (duration might change due to clamping)
-            self.duration_input.setText(str(new_end - start_frame))
-
-            # Update data structure (only end frame changes)
+            range_data["start"] = new_start
             range_data["end"] = new_end
-            print(f"Range {self.current_selected_range_id} duration updated: Start={start_frame}, End={new_end}")
-
-            # Update list item text
+            
+            self.start_frame_input.setText(str(new_start))
+            self.end_frame_input.setText(str(new_end))
+            self.duration_input.setText(str(new_end - new_start))
+            
             current_item = self.clip_range_list.currentItem()
             if current_item:
                 self._update_list_item_text(current_item, range_data)
-                
-            # Update length label
-            range_len = new_end - start_frame
-            self.clip_length_label.setText(f"Clip Length: {range_len} frames | Video Length: {self.frame_count} frames")
             
-            # Optionally update slider handle visuals here if implemented
-
+            self.clip_length_label.setText(f"Clip Length: {new_end - new_start} frames | Video Length: {self.frame_count} frames")
+            if self.frame_count > 0:
+                 self.editor.update_frame_display(new_start)
+                 self.slider.setValue(new_start)
         except ValueError:
-            print("⚠️ Invalid input for start/end frame.")
-            # Revert inputs to stored values? Or just ignore?
             self.start_frame_input.setText(str(range_data.get("start", 0)))
+
+    def update_end_frame_input(self):
+        self.last_changed_sync = 'end'
+        if not self.current_selected_range_id: return
+        range_data = self.find_range_by_id(self.current_selected_range_id)
+        if not range_data: return
+        try:
+            start_frame = int(self.start_frame_input.text())
+            new_end = int(self.end_frame_input.text())
+            if new_end > self.frame_count:
+                new_end = self.frame_count
+            if new_end <= start_frame:
+                new_end = start_frame + 1
+            
+            range_data["end"] = new_end
+            self.end_frame_input.setText(str(new_end))
+            self.duration_input.setText(str(new_end - start_frame))
+            
+            current_item = self.clip_range_list.currentItem()
+            if current_item:
+                self._update_list_item_text(current_item, range_data)
+            
+            self.clip_length_label.setText(f"Clip Length: {new_end - start_frame} frames | Video Length: {self.frame_count} frames")
+        except ValueError:
+            self.end_frame_input.setText(str(range_data.get("end", 60)))
+
+    def update_range_duration_from_input(self):
+        self.last_changed_sync = 'duration'
+        if not self.current_selected_range_id: return
+        range_data = self.find_range_by_id(self.current_selected_range_id)
+        if not range_data: return
+        try:
+            start_frame = int(self.start_frame_input.text())
+            new_duration = int(self.duration_input.text())
+            if new_duration <= 0:
+                 new_duration = range_data.get("end", start_frame) - range_data.get("start", start_frame)
+            
+            new_end = min(start_frame + new_duration, self.frame_count)
+            if new_end <= start_frame:
+                 new_duration = range_data.get("end", start_frame) - range_data.get("start", start_frame)
+                 new_end = min(start_frame + new_duration, self.frame_count)
+            
+            self.duration_input.setText(str(new_end - start_frame))
+            self.end_frame_input.setText(str(new_end))
+            range_data["end"] = new_end
+            
+            current_item = self.clip_range_list.currentItem()
+            if current_item:
+                self._update_list_item_text(current_item, range_data)
+            
+            self.clip_length_label.setText(f"Clip Length: {new_end - start_frame} frames | Video Length: {self.frame_count} frames")
+        except ValueError:
             old_duration = range_data.get("end", start_frame) - range_data.get("start", start_frame)
             self.duration_input.setText(str(old_duration))
 

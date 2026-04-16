@@ -1,5 +1,5 @@
-# VidTrainPrep
-This is a fork of VidTrainPrep, aiming to fix some bugs and add minor useful functionality.
+# Sana's VidTrainPrep
+This is Sana's fork of VidTrainPrep, aiming to fix some bugs, improve usability/UX, translate French strings to English and adding various other minor useful functionality. 
 
 # VidTrainPrep
 
