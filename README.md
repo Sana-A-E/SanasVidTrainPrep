@@ -1,4 +1,7 @@
 # VidTrainPrep
+This is a fork of VidTrainPrep, aiming to fix some bugs and add minor useful functionality.
+
+# VidTrainPrep
 
 **VidTrainPrep** is a Python-based tool designed for clipping and preparing video data, specifically tailored for creating datasets for training video models like **LORA, Wan, or Hunyuan**. It allows for precise range selection, cropping, FPS conversion, and optional AI-powered description generation using the Gemini API.
 
