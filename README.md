@@ -5,7 +5,17 @@ The code is mostly done with Gemini as it is faster than doing it by hand, (and 
 
 If I don't notice them (because they are in the part of the app functionality I rarely use) feel free to report them, and I might take the time to fix them, but as I am primarily working on this for my own use, if your requests or bugs don't align with my needs, the chances are not high that I will take them on. Don't expect anything. I just wanted to share this in case anyone else needs a bit more from their training video prep app.
 
-You can see the changes/additions I've made to the app in the [Changelog](changelog.md).
+You can see all the changes/additions I've made to the app in the [Changelog](changelog.md).
+
+## Most notable changes:
+- The UI layout was reorganized to reduce space wastage
+- Made the "Start Frame" text box editable, updating the current clip range when editing is finished. You can now manually edit start of your range and even create overlapping ranges.
+- Added "End Frame" text box next to "Start Frame" text box for range selection to enable you to set your clip range based on a specific end frame instead of just duration.
+- Range logic synchronization: start frame, end frame, and duration are now linked and recalculate based on the most recently modified property. When recalculation is triggered, the most recently modified properties are preserved while the oldest one is synced to the other two.
+- Support for keyboard shortcut `Y` for "Preview Range" alongside existing `Z` key (to accommodate QWERTZ keyboards). Also implemented global keyboard shortcuts for "Preview Range" (Z/Y) to ensure they work regardless of widget focus.
+- Frame navigation sub-controls added: "Start Frame", "End Frame" jump buttons to quickly navigate to the start and end frames of the current clip range.
+- Range boundary update controls added: "Update Start F." and "Update End F." to make it easy to quickly change the start and end frames of the range to match the current frame.
+- Added "Export Current Frame" button to export the current frame with applied crop and fixed resolution settings. Useful if you want to extract specific frames from your footage for captioning or to include it as a high res image in your dataset.
 
 # Readme of the original VidTrainPrep:
 
