@@ -38,14 +38,18 @@ class CustomGraphicsScene(QGraphicsScene):
             inflated_rect = region_scene_rect.adjusted(-tolerance, -tolerance, tolerance, tolerance)
             
             if inflated_rect.contains(event.scenePos()):
-                # Transfer the event to the crop item
-                self.crop_item.mousePressEvent(event)
-                event.accept()
+                # Let Qt handle the event dispatch to the item
+                super().mousePressEvent(event)
                 return
             else:
                 # If the click is far, remove the existing crop
                 self.removeItem(self.crop_item)
                 self.crop_item = None
+                if hasattr(self.parent_widget, "clear_crop_region_controller"):
+                    self.parent_widget.clear_crop_region_controller()
+                # If we were editing a range, we should remove the crop from it
+                if hasattr(self.parent_widget, "clear_current_range_crop") and self.parent_widget.current_selected_range_id:
+                     self.parent_widget.clear_current_range_crop()
                 # Continue to create a new crop
 
         # Start creating a new crop
@@ -56,19 +60,10 @@ class CustomGraphicsScene(QGraphicsScene):
         event.accept()
 
     def mouseMoveEvent(self, event):
-        scene_pos = event.scenePos()
-        
-        # If a crop exists and the mouse is inside
-        if self.crop_item and self.crop_item.contains(scene_pos):
-            # Transfer the event to the crop item
-            self.crop_item.mouseMoveEvent(event)
-            event.accept()
-            return
-
         # If we are drawing a new crop
         if self.start_point and self.temp_rect_item:
-            current_point = scene_pos
-            rect = QRectF(self.start_point, current_point).normalized()
+            scene_pos = event.scenePos()
+            rect = QRectF(self.start_point, scene_pos).normalized()
 
             # Apply aspect ratio constraint if defined
             if self.aspect_ratio is not None:
@@ -115,4 +110,6 @@ class CustomGraphicsScene(QGraphicsScene):
                     self.parent_widget.crop_rect_finalized(self.crop_item.sceneBoundingRect())
             event.accept()
         else:
+            self.start_point = None
+            self.temp_rect_item = None
             super().mouseReleaseEvent(event)

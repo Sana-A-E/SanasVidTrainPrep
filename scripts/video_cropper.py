@@ -303,6 +303,52 @@ class VideoCropper(QWidget):
         self.apply_fixed_res_button.clicked.connect(lambda: self.toggle_fixed_resolution_mode(True))
         self.clear_fixed_res_button.clicked.connect(lambda: self.toggle_fixed_resolution_mode(False))
 
+        # --- Current Crop Details ---
+        current_crop_group = QWidget()
+        current_crop_layout = QFormLayout(current_crop_group)
+        current_crop_layout.setContentsMargins(0, 5, 0, 5)
+
+        crop_xy_layout = QHBoxLayout()
+        self.crop_x_input = QLineEdit()
+        self.crop_x_input.setPlaceholderText("0")
+        self.crop_x_input.setToolTip("X coordinate of the crop (Top-Left corner of the video is 0,0)")
+        self.crop_x_input.setValidator(QIntValidator(0, 7680, self))
+        self.crop_y_input = QLineEdit()
+        self.crop_y_input.setPlaceholderText("0")
+        self.crop_y_input.setToolTip("Y coordinate of the crop (Top-Left corner of the video is 0,0)")
+        self.crop_y_input.setValidator(QIntValidator(0, 7680, self))
+        crop_xy_layout.addWidget(QLabel("X:"))
+        crop_xy_layout.addWidget(self.crop_x_input)
+        crop_xy_layout.addWidget(QLabel("Y:"))
+        crop_xy_layout.addWidget(self.crop_y_input)
+        current_crop_layout.addRow(crop_xy_layout)
+
+        crop_wh_layout = QHBoxLayout()
+        self.crop_w_input = QLineEdit()
+        self.crop_w_input.setPlaceholderText("Width")
+        self.crop_w_input.setToolTip("Width of the crop area in original pixels")
+        self.crop_w_input.setValidator(QIntValidator(2, 7680, self))
+        self.crop_h_input = QLineEdit()
+        self.crop_h_input.setPlaceholderText("Height")
+        self.crop_h_input.setToolTip("Height of the crop area in original pixels")
+        self.crop_h_input.setValidator(QIntValidator(2, 7680, self))
+        crop_wh_layout.addWidget(QLabel("W:"))
+        crop_wh_layout.addWidget(self.crop_w_input)
+        crop_wh_layout.addWidget(QLabel("H:"))
+        crop_wh_layout.addWidget(self.crop_h_input)
+        current_crop_layout.addRow(crop_wh_layout)
+
+        self.apply_manual_crop_button = QPushButton("Update Crop from Text")
+        self.apply_manual_crop_button.setToolTip("Apply the above coordinates and size to the current crop.")
+        self.apply_manual_crop_button.clicked.connect(self.apply_manual_crop)
+        current_crop_layout.addRow(self.apply_manual_crop_button)
+        
+        # Connect enter key on inputs
+        self.crop_x_input.returnPressed.connect(self.apply_manual_crop)
+        self.crop_y_input.returnPressed.connect(self.apply_manual_crop)
+        self.crop_w_input.returnPressed.connect(self.apply_manual_crop)
+        self.crop_h_input.returnPressed.connect(self.apply_manual_crop)
+
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setEnabled(False)
         self.slider.sliderMoved.connect(self.editor.scrub_video)
@@ -412,7 +458,16 @@ class VideoCropper(QWidget):
         # Tab 1: Crop
         crop_tab = QWidget()
         crop_layout = QVBoxLayout(crop_tab)
+        
+        # Add Current Crop Details (New layout container)
+        crop_details_box = QWidget()
+        crop_details_box_layout = QVBoxLayout(crop_details_box)
+        crop_details_box_layout.addWidget(QLabel("<b>Current Crop</b>"))
+        crop_details_box_layout.addWidget(current_crop_group)
+        crop_details_box_layout.setContentsMargins(0,0,0,0)
+
         crop_layout.addWidget(resolution_aspect_group)
+        crop_layout.addWidget(crop_details_box)
         crop_layout.addStretch(1)
         self.tabs.addTab(crop_tab, "Crop")
         
@@ -522,8 +577,20 @@ class VideoCropper(QWidget):
                  self.clear_crop_region_controller() # Clear invalid visual crop
                  return
                  
+        # Snap dimensions to be divisible by 2
+        w = w - (w % 2)
+        h = h - (h % 2)
+        if w < 2: w = 2
+        if h < 2: h = 2
+
         crop_tuple = (x, y, w, h)
         print(f"[DEBUG crop_rect_finalized] Final crop_tuple for storage: {crop_tuple}")
+        
+        # Update Current Crop UI
+        self.crop_x_input.setText(str(x))
+        self.crop_y_input.setText(str(y))
+        self.crop_w_input.setText(str(w))
+        self.crop_h_input.setText(str(h))
         
         # --- Apply Crop to Selected Range OR Create New Range ---
         if self.current_selected_range_id:
@@ -1149,8 +1216,53 @@ class VideoCropper(QWidget):
                 crop_item = InteractiveCropRegion(scene_rect, aspect_ratio=self.scene.aspect_ratio) # Pass aspect ratio here
                 self.scene.addItem(crop_item)
                 self.current_rect = crop_item # Keep track of the visual item
+                
+                # Update UI elements
+                self.crop_x_input.setText(str(x))
+                self.crop_y_input.setText(str(y))
+                self.crop_w_input.setText(str(w))
+                self.crop_h_input.setText(str(h))
             else:
                 print("⚠️ Cannot display crop: pixmap invalid.")
+
+    def apply_manual_crop(self):
+        """Applies crop typed manually in the Current Crop input fields."""
+        if not self.current_selected_range_id:
+            QMessageBox.warning(self, "No Selection", "Please select a range first to modify its crop.")
+            return
+            
+        try:
+            x = int(self.crop_x_input.text())
+            y = int(self.crop_y_input.text())
+            w = int(self.crop_w_input.text())
+            h = int(self.crop_h_input.text())
+        except ValueError:
+            QMessageBox.warning(self, "Input Error", "Crop values must be integers.")
+            return
+
+        if self.original_width <= 0 or self.original_height <= 0:
+            return
+
+        x = max(0, min(x, self.original_width - 1))
+        y = max(0, min(y, self.original_height - 1))
+        
+        w = max(2, min(w, self.original_width - x))
+        h = max(2, min(h, self.original_height - y))
+        w = w - (w % 2)
+        h = h - (h % 2)
+        
+        # update inputs back to corrected values
+        self.crop_x_input.setText(str(x))
+        self.crop_y_input.setText(str(y))
+        self.crop_w_input.setText(str(w))
+        self.crop_h_input.setText(str(h))
+
+        crop_tuple = (x, y, w, h)
+        range_data = self.find_range_by_id(self.current_selected_range_id)
+        if range_data:
+            range_data["crop"] = crop_tuple
+            print(f"Manually updated crop for range {self.current_selected_range_id}: {crop_tuple}")
+            self._load_range_crop(range_data)
 
     def open_convert_fps_dialog(self):
         """Opens the dialog to configure and start FPS conversion."""

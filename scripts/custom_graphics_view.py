@@ -7,23 +7,17 @@ class CustomGraphicsView(QGraphicsView):
         super().__init__(*args, **kwargs)
         self.setMouseTracking(True)
 
-    def mouseMoveEvent(self, event: QMouseEvent):
-        grabbed = self.scene().mouseGrabberItem()
-        if grabbed:
-            # Map the view's mouse position to scene coordinates.
-            scene_pos = self.mapToScene(event.pos())
-            # Then map the scene position to the grabbed item's local coordinates.
-            local_pos = grabbed.mapFromScene(scene_pos)
-            # Create a new fake QMouseEvent with the local coordinates.
-            fake_event = QMouseEvent(
-                event.type(),
-                local_pos,
-                event.globalPosition(),
-                event.button(),
-                event.buttons(),
-                event.modifiers()
-            )
-            grabbed.mouseMoveEvent(fake_event)
-            event.accept()
-        else:
-            super().mouseMoveEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.scene() and hasattr(self.scene(), 'parent_widget'):
+            app = self.scene().parent_widget
+            if hasattr(app, 'editor') and hasattr(app, 'slider'):
+                # Redraw frame which rescales the pixmap based on new view size
+                app.editor.update_frame_display(app.slider.value())
+                # Reload crop region to match the newly scaled scene coordinates
+                if app.current_selected_range_id:
+                    range_data = app.find_range_by_id(app.current_selected_range_id)
+                    if range_data and range_data.get("crop"):
+                        app._load_range_crop(range_data)
+
