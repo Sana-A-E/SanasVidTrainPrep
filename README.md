@@ -1,13 +1,14 @@
 # Sana's VidTrainPrep
-This is Sana's fork of VidTrainPrep, aiming to fix some bugs, improve usability/UX, translate French strings to English and adding various other minor useful functionality. 
+This is Sana's fork of VidTrainPrep, aiming to fix some bugs, improve usability/UX, translate French strings to English and add usefull missing functionality. 
 
 The code is mostly done with Gemini as it is faster than doing it by hand, (and because Python isn't my speciality), so I can't guarantee that there won't be regressions or bugs. However, as I am activelly using the app, the bugs I notice, I will of course fix.
 
-If I don't notice them (because they are in the part of the app functionality I rarely use) feel free to report them, and I might take the time to fix them, but as I am primarily working on this for my own use, if your requests or bugs don't align with my needs, the chances are not high that I will take them on. Don't expect anything. I just wanted to share this in case anyone else needs a bit more from their training video prep app.
+If I don't notice them (because they are in the part of the app functionality I rarely use) feel free to report them, and I might take the time to fix them, but as I am primarily working on this for my own use, if your requests or bugs don't align with my needs, the chances are not high that I will take them on. Don't expect anything. I just wanted to share this in case anyone else needs their video dataset prep app to be more stable and feature complete.
 
-You can see all the changes/additions I've made to the app in the [Changelog](changelog.md).
+I will not be working further on the captioning aspect of the app, nor upgrading/fixing the Gemini API as there are other apps that do captioning better (I recommend [Vision Captioner](https://github.com/Brekel/VisionCaptioner).)
 
 ## Most notable changes:
+- Fixed drawing of crop regions to actually work without causing app crashes. Crop region can now be properly resized and moved after creation as you would expect.
 - The UI layout was reorganized to reduce space wastage
 - Made the "Start Frame" text box editable, updating the current clip range when editing is finished. You can now manually edit start of your range and even create overlapping ranges.
 - Added "End Frame" text box next to "Start Frame" text box for range selection to enable you to set your clip range based on a specific end frame instead of just duration.
@@ -17,7 +18,9 @@ You can see all the changes/additions I've made to the app in the [Changelog](ch
 - Range boundary update controls added: "Update Start F." and "Update End F." to make it easy to quickly change the start and end frames of the range to match the current frame.
 - Added "Export Current Frame" button to export the current frame with applied crop and fixed resolution settings. Useful if you want to extract specific frames from your footage for captioning or to include it as a high res image in your dataset.
 
-# Readme of the original VidTrainPrep:
+[View all changes in Changelog](changelog.md).
+
+# Outdated Readme of the original VidTrainPrep:
 
 **VidTrainPrep** is a Python-based tool designed for clipping and preparing video data, specifically tailored for creating datasets for training video models like **LORA, Wan, or Hunyuan**. It allows for precise range selection, cropping, FPS conversion, and optional AI-powered description generation using the Gemini API.
 

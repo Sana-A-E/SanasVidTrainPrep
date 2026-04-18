@@ -1,6 +1,6 @@
 # interactive_crop_region.py
-from PyQt6.QtWidgets import QGraphicsRectItem, QStyleOptionGraphicsItem, QWidget
-from PyQt6.QtGui import QPen, QBrush, QColor, QMouseEvent, QWheelEvent, QPainter
+from PyQt6.QtWidgets import QGraphicsRectItem, QStyleOptionGraphicsItem, QWidget, QGraphicsSceneMouseEvent, QGraphicsSceneWheelEvent, QGraphicsSceneHoverEvent
+from PyQt6.QtGui import QPen, QBrush, QColor, QPainter
 from PyQt6.QtCore import QRectF, Qt, QPointF
 
 class InteractiveCropRegion(QGraphicsRectItem):
@@ -47,6 +47,12 @@ class InteractiveCropRegion(QGraphicsRectItem):
         extra = self.HANDLE_SIZE / 2
         return rect.adjusted(-extra, -extra, extra, extra)
 
+    def shape(self):
+        from PyQt6.QtGui import QPainterPath
+        path = QPainterPath()
+        path.addRect(self.boundingRect())
+        return path
+
     def updateHandlePositions(self):
         """Compute small square handles at the four corners of the crop rect."""
         r = self.rect()
@@ -71,8 +77,8 @@ class InteractiveCropRegion(QGraphicsRectItem):
             painter.drawRect(handle_rect)
             painter.drawRect(handle_rect)
 
-    def hoverMoveEvent(self, event: QMouseEvent):
-        pos = QPointF(event.pos())
+    def hoverMoveEvent(self, event: QGraphicsSceneHoverEvent):
+        pos = event.pos()
         handle = self.getHandleAt(pos)
         if handle:
             if handle in ("top_left", "bottom_right"):
@@ -91,8 +97,8 @@ class InteractiveCropRegion(QGraphicsRectItem):
                 return name
         return None
 
-    def mousePressEvent(self, event: QMouseEvent):
-        pos_local = QPointF(event.pos())
+    def mousePressEvent(self, event: QGraphicsSceneMouseEvent):
+        pos_local = event.pos()
         handle = self.getHandleAt(pos_local)
         if handle:
             self.active_handle = handle
@@ -101,13 +107,13 @@ class InteractiveCropRegion(QGraphicsRectItem):
             self.start_mouse_pos = pos_local
         else:
             self.resizing = False
-            self._drag_offset = self.mapToScene(QPointF(event.pos())) - self.scenePos()
+            super().mousePressEvent(event)
         event.accept()
 
-    def mouseMoveEvent(self, event: QMouseEvent):
+    def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent):
         # Normal handling for non-WAN mode
         if self.resizing and self.active_handle:
-            current_pos = QPointF(event.pos())
+            current_pos = event.pos()
             delta = current_pos - self.start_mouse_pos
             new_rect = QRectF(self.start_rect)
             if self.active_handle == "top_left":
@@ -180,12 +186,12 @@ class InteractiveCropRegion(QGraphicsRectItem):
             if hasattr(self.scene().parent_widget, "crop_rect_updating"):
                 self.scene().parent_widget.crop_rect_updating(self.sceneBoundingRect())
         else:
-            new_scene_pos = self.mapToScene(QPointF(event.pos()))
-            new_pos = new_scene_pos - self._drag_offset
-            self.setPos(new_pos)
-            event.accept()
+            super().mouseMoveEvent(event)
 
-    def mouseReleaseEvent(self, event: QMouseEvent):
+    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent):
+        if not self.resizing:
+            super().mouseReleaseEvent(event)
+        self.resizing = False
         self.clamp_to_scene_bounds()
         event.accept()
         if hasattr(self.scene().parent_widget, "crop_rect_finalized"):
@@ -207,13 +213,8 @@ class InteractiveCropRegion(QGraphicsRectItem):
         if dx or dy:
             self.moveBy(dx, dy)
 
-    def wheelEvent(self, event: QWheelEvent):
-        if hasattr(event, "angleDelta"):
-            delta_val = event.angleDelta().y()
-        elif hasattr(event, "pixelDelta"):
-            delta_val = event.pixelDelta().y()
-        else:
-            delta_val = 0
+    def wheelEvent(self, event: QGraphicsSceneWheelEvent):
+        delta_val = event.delta()
         scale_factor = 1 + (delta_val / 120) * 0.1
         current_rect = self.rect()
         center = current_rect.center()

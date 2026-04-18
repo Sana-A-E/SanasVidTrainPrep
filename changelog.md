@@ -24,5 +24,8 @@
 ### Bug Fixes
 - Normalized paths across entire app to prevent "file not found" errors and ensured session data is sanitized as well.
 
-## [2026-04-18]
 
+## [2026-04-18]
+### Bug Fixes
+- Crop region usage no longer causes "random" crashes.
+- Crop region can now be properly resized and moved after creation.
