@@ -276,8 +276,8 @@ class VideoExporter:
             QMessageBox.critical(self.main_app, "Error", "Invalid base folder path selected.")
             return
              
-        output_folder_cropped = os.path.join(base_folder, "cropped")
-        output_folder_uncropped = os.path.join(base_folder, "uncropped")
+        output_folder_cropped = os.path.normpath(os.path.join(base_folder, "cropped"))
+        output_folder_uncropped = os.path.normpath(os.path.join(base_folder, "uncropped"))
         # Create folders only if needed by selected options
         if export_cropped_flag or (export_image_flag and export_cropped_flag):
             os.makedirs(output_folder_cropped, exist_ok=True)
@@ -405,7 +405,7 @@ class VideoExporter:
                                     cropped_frame = frame[y:y+h, x:x+w]
                                     if cropped_frame.size > 0:
                                         img_name = f"{base_output_name}_cropped.png"
-                                        img_path = os.path.join(output_folder_cropped, img_name)
+                                        img_path = os.path.normpath(os.path.join(output_folder_cropped, img_name))
                                         try:
                                             cv2.imwrite(img_path, cropped_frame)
                                             print(f"      🖼️ Exported Cropped Image: {os.path.basename(img_path)}")
@@ -420,7 +420,7 @@ class VideoExporter:
                             # Export Uncropped Image?
                             if export_uncropped_flag:
                                 img_name = f"{base_output_name}.png"
-                                img_path = os.path.join(output_folder_uncropped, img_name)
+                                img_path = os.path.normpath(os.path.join(output_folder_uncropped, img_name))
                                 try:
                                     cv2.imwrite(img_path, frame)
                                     print(f"      🖼️ Exported Uncropped Image: {os.path.basename(img_path)}")
@@ -447,7 +447,7 @@ class VideoExporter:
                         else:
                             _, ext = os.path.splitext(original_path)
                             output_name = f"{base_output_name}_cropped{ext}"
-                            output_path = os.path.join(output_folder_cropped, output_name)
+                            output_path = os.path.normpath(os.path.join(output_folder_cropped, output_name))
                             print(f"    🎬 Exporting Cropped Video: {output_name}...")
                             try:
                                 stream = ffmpeg.input(original_path, ss=ss, t=t)
@@ -514,7 +514,7 @@ class VideoExporter:
                     if export_uncropped_flag:
                         _, ext = os.path.splitext(original_path)
                         output_name = f"{base_output_name}{ext}"
-                        output_path = os.path.join(output_folder_uncropped, output_name)
+                        output_path = os.path.normpath(os.path.join(output_folder_uncropped, output_name))
                         print(f"    🎬 Exporting Uncropped Video: {output_name}...")
                         try:
                             stream = ffmpeg.input(original_path, ss=ss, t=t)
@@ -626,7 +626,7 @@ class VideoExporter:
         Generates a Gemini description for each image.
         """
         main_app = self.main_app
-        output_folder_images = os.path.join(main_app.folder_path, "exported_images")
+        output_folder_images = os.path.normpath(os.path.join(main_app.folder_path, "exported_images"))
         os.makedirs(output_folder_images, exist_ok=True)
         print(f"--- Starting export of first frames for ranges (images) to {output_folder_images} ---")
 
@@ -708,10 +708,10 @@ class VideoExporter:
                     # Build output filename
                     image_base_name = f"{base_video_name}_range{range_idx_display}_frame{start_frame}"
                     count = 0
-                    temp_out_path = os.path.join(output_folder_images, f"{image_base_name}.png")
+                    temp_out_path = os.path.normpath(os.path.join(output_folder_images, f"{image_base_name}.png"))
                     while os.path.exists(temp_out_path):
                         count += 1
-                        temp_out_path = os.path.join(output_folder_images, f"{image_base_name}_{count}.png")
+                        temp_out_path = os.path.normpath(os.path.join(output_folder_images, f"{image_base_name}_{count}.png"))
                     out_path_image = temp_out_path
 
                     try:
@@ -745,6 +745,86 @@ class VideoExporter:
         
         print(f"--- Export of first frames complete. {total_images_exported} images exported. ---")
         QMessageBox.information(main_app, "Export Complete", f"{total_images_exported} images (first frames of ranges) have been exported.")
+
+    def export_current_frame_as_image(self):
+        main_app = self.main_app
+        if not main_app.current_video_original_path:
+            QMessageBox.warning(main_app, "No Video", "Please load a video first.")
+            return
+
+        current_frame_num = main_app.slider.value()
+        original_path = main_app.current_video_original_path
+        
+        # Get base name for output
+        video_entry = next((v for v in main_app.video_files if v["original_path"] == original_path), None)
+        base_video_name = "image"
+        if video_entry:
+            base_video_name, _ = os.path.splitext(video_entry.get("display_name", "image"))
+
+        output_folder_images = os.path.normpath(os.path.join(main_app.folder_path, "exported_images"))
+        os.makedirs(output_folder_images, exist_ok=True)
+        
+        cap = None
+        try:
+            cap = cv2.VideoCapture(original_path)
+            if not cap.isOpened():
+                QMessageBox.critical(main_app, "Error", f"Could not open video source {original_path}.")
+                return
+            
+            cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame_num)
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                QMessageBox.critical(main_app, "Error", f"Could not read frame {current_frame_num}.")
+                return
+                
+            img_to_process = frame.copy()
+            
+            range_idx_display = ""
+            if main_app.current_selected_range_id:
+                range_data = main_app.find_range_by_id(main_app.current_selected_range_id)
+                if range_data and range_data.get("crop"):
+                    x, y, w, h = range_data.get("crop")
+                    current_h_img, current_w_img = img_to_process.shape[:2]
+                    if not (x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > current_w_img or y + h > current_h_img):
+                        img_to_process = img_to_process[y:y+h, x:x+w]
+                if range_data:
+                    range_idx_display = f"_range{range_data.get('index', 'X')}"
+            
+            # Apply fixed resolution globally
+            fixed_w = getattr(main_app, 'fixed_export_width', None)
+            fixed_h = getattr(main_app, 'fixed_export_height', None)
+            if fixed_w and fixed_h:
+                img_to_process = cv2.resize(img_to_process, (fixed_w, fixed_h), interpolation=cv2.INTER_AREA)
+                
+            # Build output filename
+            image_base_name = f"{base_video_name}{range_idx_display}_frame{current_frame_num}"
+            count = 0
+            temp_out_path = os.path.normpath(os.path.join(output_folder_images, f"{image_base_name}.png"))
+            while os.path.exists(temp_out_path):
+                count += 1
+                temp_out_path = os.path.normpath(os.path.join(output_folder_images, f"{image_base_name}_{count}.png"))
+            out_path_image = temp_out_path
+            
+            cv2.imwrite(out_path_image, img_to_process)
+            
+            if getattr(main_app, 'gemini_caption_checkbox', None) and main_app.gemini_caption_checkbox.isChecked():
+                if not self.gemini_model and not self._configure_gemini():
+                    self.write_caption(out_path_image)
+                else:
+                    caption = self.generate_gemini_caption(out_path_image)
+                    if caption:
+                        self.write_caption(out_path_image, caption_content=caption)
+                    else:
+                        self.write_caption(out_path_image)
+            else:
+                self.write_caption(out_path_image)
+                
+            QMessageBox.information(main_app, "Export Complete", f"Current frame exported to {os.path.basename(out_path_image)}.")
+            
+        except Exception as e:
+            QMessageBox.critical(main_app, "Error", f"Error exporting frame: {e}")
+        finally:
+            if cap and cap.isOpened(): cap.release()
 
     @staticmethod
     def qimage_to_cv(qimg):

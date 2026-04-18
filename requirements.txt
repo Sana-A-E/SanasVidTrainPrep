@@ -4,3 +4,4 @@ ffmpeg-python
 numpy
 google-generativeai
 Pillow
+send2trash

@@ -12,6 +12,7 @@ class VideoLoader:
     def load_folder(self):
         folder = QFileDialog.getExistingDirectory(self.main_app, "Select Folder")
         if folder:
+            folder = os.path.normpath(folder)
             self.main_app.folder_path = folder
             # Check if we already have saved session data for this folder.
             if folder in self.main_app.folder_sessions:
@@ -37,7 +38,7 @@ class VideoLoader:
             display_name = f
             # If this video was loaded previously in this folder, preserve its settings.
             video_entry = previous_videos.get(display_name, {
-                "original_path": os.path.join(self.main_app.folder_path, f),
+                "original_path": os.path.normpath(os.path.join(self.main_app.folder_path, f)),
                 "display_name": display_name,
                 "copy_number": 0,
                 "export_enabled": False  # Default state
@@ -211,12 +212,32 @@ class VideoLoader:
             try:
                 with open(self.session_file, "r") as file:
                     session_data = json.load(file)
-                    self.main_app.folder_path = session_data.get("folder_path", "")
+                    self.main_app.folder_path = os.path.normpath(session_data.get("folder_path", ""))
                     # Load video_files and folder_sessions as before
-                    self.main_app.video_files = session_data.get("video_files", [])
-                    self.main_app.folder_sessions = session_data.get("folder_sessions", {})
-                    # Load the new video_data structure containing ranges
-                    self.main_app.video_data = session_data.get("video_data", {})
+                    # Normalize paths inside video_files
+                    video_files = session_data.get("video_files", [])
+                    for entry in video_files:
+                        if "original_path" in entry:
+                            entry["original_path"] = os.path.normpath(entry["original_path"])
+                    self.main_app.video_files = video_files
+
+                    # Normalize keys in folder_sessions
+                    folder_sessions = session_data.get("folder_sessions", {})
+                    normalized_folder_sessions = {}
+                    for folder, videos in folder_sessions.items():
+                        norm_folder = os.path.normpath(folder)
+                        for video_entry in videos:
+                            if "original_path" in video_entry:
+                                video_entry["original_path"] = os.path.normpath(video_entry["original_path"])
+                        normalized_folder_sessions[norm_folder] = videos
+                    self.main_app.folder_sessions = normalized_folder_sessions
+
+                    # Normalize keys in video_data
+                    video_data = session_data.get("video_data", {})
+                    normalized_video_data = {}
+                    for path, data in video_data.items():
+                        normalized_video_data[os.path.normpath(path)] = data
+                    self.main_app.video_data = normalized_video_data
                     # Load other settings
                     self.main_app.longest_edge = session_data.get("longest_edge", 1024)
                     print("Session loaded successfully.")
@@ -280,7 +301,7 @@ class VideoLoader:
             print("❌ Cannot convert: Source folder not valid.")
             return False
             
-        output_folder = os.path.join(source_folder, output_subdir)
+        output_folder = os.path.normpath(os.path.join(source_folder, output_subdir))
         try:
             os.makedirs(output_folder, exist_ok=True)
         except OSError as e:
@@ -290,7 +311,7 @@ class VideoLoader:
         print(f"Starting conversion to {target_fps} FPS in folder: {output_folder}")
         video_files_to_convert = [f for f in os.listdir(source_folder) 
                                    if f.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')) and \
-                                   os.path.isfile(os.path.join(source_folder, f))]
+                                   os.path.isfile(os.path.normpath(os.path.join(source_folder, f)))]
                                    
         if not video_files_to_convert:
             print("ℹ️ No video files found in the source folder to convert.")
@@ -302,8 +323,8 @@ class VideoLoader:
         fail_count = 0
         
         for filename in video_files_to_convert:
-            input_path = os.path.join(source_folder, filename)
-            output_path = os.path.join(output_folder, filename) # Keep original filename
+            input_path = os.path.normpath(os.path.join(source_folder, filename))
+            output_path = os.path.normpath(os.path.join(output_folder, filename)) # Keep original filename
             print(f"  Converting: {filename} -> {target_fps} FPS...")
             
             # Check if output file already exists - skip for now

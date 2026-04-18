@@ -1,4 +1,4 @@
-import sys, os, cv2, ffmpeg, json, numpy as np
+import sys, os, cv2, ffmpeg, json, numpy as np, send2trash
 import uuid # Import UUID for unique range IDs
 from scripts.custom_graphics_view import CustomGraphicsView
 from PyQt6.QtWidgets import (
@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy, QCheckBox, QListWidgetItem, QComboBox, QMessageBox, QDialog, QFormLayout, QDialogButtonBox,
     QSpacerItem, QTabWidget, QToolButton # Added QToolButton
 )
-from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QIcon, QMouseEvent, QIntValidator
+from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QIcon, QMouseEvent, QIntValidator, QKeySequence, QShortcut
 from PyQt6.QtCore import Qt, QTimer, QRectF
 
 # Custom scene (modified to use the new crop region)
@@ -96,21 +96,27 @@ class VideoCropper(QWidget):
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         left_panel.addWidget(icon_label)
         
+        top_buttons_layout = QHBoxLayout()
         self.folder_button = QPushButton("Select Folder")
         self.folder_button.clicked.connect(self.loader.load_folder)
-        left_panel.addWidget(self.folder_button)
+        top_buttons_layout.addWidget(self.folder_button)
         
-        # Add FPS Conversion Button
         self.convert_fps_button = QPushButton("Convert FPS...")
         self.convert_fps_button.setToolTip("Convert all videos in the current folder to a target FPS.")
-        self.convert_fps_button.clicked.connect(self.open_convert_fps_dialog) # New method
-        left_panel.addWidget(self.convert_fps_button)
+        self.convert_fps_button.clicked.connect(self.open_convert_fps_dialog)
+        top_buttons_layout.addWidget(self.convert_fps_button)
+        left_panel.addLayout(top_buttons_layout)
         
         # Main video list
         left_panel.addWidget(QLabel("Video Files:"))
         self.video_list.itemClicked.connect(self.loader.load_video) # load_video needs update
         # self.video_list.itemChanged.connect(self.loader.update_list_item_color) # Keep this
         left_panel.addWidget(self.video_list, 1) # More vertical space
+
+        self.delete_video_button = QPushButton("🗑️ Delete Video")
+        self.delete_video_button.setToolTip("Deletes the selected video and moves it to recycle bin.")
+        self.delete_video_button.clicked.connect(self.delete_current_video)
+        left_panel.addWidget(self.delete_video_button)
 
         # --- Clip Range Management Panel ---
         range_group_box = QWidget() # Use a QWidget for layout within the panel
@@ -119,9 +125,8 @@ class VideoCropper(QWidget):
 
         range_layout.addWidget(QLabel("Clip Ranges for Selected Video:"))
         self.clip_range_list = QListWidget()
-        self.clip_range_list.setFixedHeight(150) # Adjust height as needed
         self.clip_range_list.itemClicked.connect(self.select_range) # New method needed
-        range_layout.addWidget(self.clip_range_list)
+        range_layout.addWidget(self.clip_range_list, 1)
 
         # Range Start/End/Duration Inputs
         range_input_layout = QHBoxLayout()
@@ -156,6 +161,8 @@ class VideoCropper(QWidget):
         range_button_layout.addWidget(self.remove_range_button)
         self.play_range_button = QPushButton("Preview Range (Z/Y)") # New Button
         self.play_range_button.clicked.connect(self.toggle_play_selected_range) # New method
+        QShortcut(QKeySequence("Z"), self).activated.connect(self.toggle_play_selected_range)
+        QShortcut(QKeySequence("Y"), self).activated.connect(self.toggle_play_selected_range)
         range_button_layout.addWidget(self.play_range_button)
         range_layout.addLayout(range_button_layout)
 
@@ -178,8 +185,20 @@ class VideoCropper(QWidget):
         self.export_image_checkbox.setChecked(False)
         left_panel.addWidget(self.export_image_checkbox)
 
-        # Add spacer to push export settings down
-        left_panel.addStretch(1)
+        # Add spacer but replace it with toggle logic and widget container
+        workflow_toggle_layout = QHBoxLayout()
+        self.toggle_workflow_btn = QToolButton()
+        self.toggle_workflow_btn.setArrowType(Qt.ArrowType.UpArrow)
+        self.toggle_workflow_btn.setCheckable(True)
+        self.toggle_workflow_btn.clicked.connect(self.toggle_workflow_labels)
+        workflow_toggle_layout.addWidget(QLabel("Workflow & Attribution:"))
+        workflow_toggle_layout.addWidget(self.toggle_workflow_btn)
+        workflow_toggle_layout.addStretch()
+        left_panel.addLayout(workflow_toggle_layout)
+
+        self.workflow_container = QWidget()
+        workflow_vlayout = QVBoxLayout(self.workflow_container)
+        workflow_vlayout.setContentsMargins(0,0,0,0)
 
         # Add Description Label
         description_label = QLabel(
@@ -197,7 +216,7 @@ class VideoCropper(QWidget):
         description_label.setWordWrap(True)
         description_label.setAlignment(Qt.AlignmentFlag.AlignTop)
         description_label.setStyleSheet("font-size: 11px; color: #B0B0B0; background-color: transparent; padding: 5px; border-top: 1px solid #555555;") # Add style
-        left_panel.addWidget(description_label)
+        workflow_vlayout.addWidget(description_label)
 
         # Add Attribution Label
         attribution_label = QLabel(
@@ -206,7 +225,9 @@ class VideoCropper(QWidget):
         attribution_label.setOpenExternalLinks(True)
         attribution_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         attribution_label.setStyleSheet("font-size: 11px; color: #A0A0A0; background-color: transparent; margin-top: 5px;") # Increased font size
-        left_panel.addWidget(attribution_label)
+        workflow_vlayout.addWidget(attribution_label)
+        
+        left_panel.addWidget(self.workflow_container)
 
         main_layout.addLayout(left_panel, 1) # Left panel takes less space relative to right
 
@@ -409,9 +430,13 @@ class VideoCropper(QWidget):
         self.submit_button.clicked.connect(self.exporter.export_videos)
         export_buttons_layout.addWidget(self.submit_button)
         
-        self.export_range_start_frames_button = QPushButton("Export 1st Frame of Ranges (Images)")
+        self.export_range_start_frames_button = QPushButton("Export 1st Frame of Ranges")
         self.export_range_start_frames_button.clicked.connect(self.trigger_export_range_start_frames)
         export_buttons_layout.addWidget(self.export_range_start_frames_button)
+
+        self.export_current_frame_button = QPushButton("Export Current Frame")
+        self.export_current_frame_button.clicked.connect(self.exporter.export_current_frame_as_image)
+        export_buttons_layout.addWidget(self.export_current_frame_button)
         
         right_panel.addLayout(export_buttons_layout)
         
@@ -564,6 +589,60 @@ class VideoCropper(QWidget):
             for i in range(self.tabs.count()):
                 self.tabs.widget(i).setVisible(True)
             self.tabs.setMaximumHeight(16777215)
+        # Re-layout and trigger frame redraw to fit available window space 
+        if self.tabs.parentWidget() and self.tabs.parentWidget().layout():
+            self.tabs.parentWidget().layout().invalidate()
+        QTimer.singleShot(25, lambda: self.editor.update_frame_display(self.slider.value()) if getattr(self, 'frame_count', 0) > 0 else None)
+
+    def toggle_workflow_labels(self, checked):
+        if checked:
+            self.toggle_workflow_btn.setArrowType(Qt.ArrowType.DownArrow)
+            self.workflow_container.setVisible(False)
+        else:
+            self.toggle_workflow_btn.setArrowType(Qt.ArrowType.UpArrow)
+            self.workflow_container.setVisible(True)
+
+    def delete_current_video(self):
+        if not self.current_video_original_path: return
+        
+        reply = QMessageBox.question(self, "Delete Video", f"Are you sure you want to move this file to the recycle bin?\n\n{self.current_video_original_path}", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                # Release video file first to avoid 'file in use' errors
+                if hasattr(self.editor, 'cap') and self.editor.cap:
+                    self.editor.cap.release()
+                    self.editor.cap = None
+
+                send2trash.send2trash(self.current_video_original_path)
+
+                for i in range(self.video_list.count()):
+                    item = self.video_list.item(i)
+                    if getattr(item, 'original_path', None) == self.current_video_original_path or item.text().startswith(os.path.basename(self.current_video_original_path)): 
+                        row = self.video_list.row(item)
+                        self.video_list.takeItem(row) # Automatically removes from UI
+                        break
+                        
+                self.video_files = [v for v in self.video_files if v["original_path"] != self.current_video_original_path]
+                if self.current_video_original_path in self.video_data:
+                    del self.video_data[self.current_video_original_path]
+
+                self.current_video_original_path = None
+                
+                # Check next item and load it
+                if self.video_list.count() > 0:
+                    self.video_list.setCurrentRow(0)
+                else:
+                    self.scene.clear()
+                    self.scene.update()
+                    self.graphics_view.update()
+                    self.slider.setEnabled(False)
+                    self.slider.setValue(0)
+                    self.start_frame_input.setText("0")
+                    self.end_frame_input.setText("0")
+                    self.duration_input.setText("0")
+                    
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to delete video: {e}")
 
     def jump_to_range_start(self):
         if not self.current_selected_range_id: return
@@ -1091,7 +1170,7 @@ class VideoCropper(QWidget):
                 if success:
                     QMessageBox.information(self, "Conversion Complete", f"Videos converted to {target_fps} FPS in subfolder '{output_subdir}'. Reloading folder.")
                     # Automatically load the new folder
-                    new_folder_path = os.path.join(self.folder_path, output_subdir)
+                    new_folder_path = os.path.normpath(os.path.join(self.folder_path, output_subdir))
                     self.folder_path = new_folder_path # Update main path
                     self.loader.load_folder_contents() # Reload contents
                 else:
@@ -1271,7 +1350,7 @@ class ConvertFpsDialog(QDialog):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     # Use explicit path check
-    css_path = os.path.join("styles", "dark_mode.css")
+    css_path = os.path.normpath(os.path.join("styles", "dark_mode.css"))
     if os.path.exists(css_path):
         try:
             with open(css_path, "r") as file:
