@@ -174,22 +174,32 @@ class VideoCropper(QWidget):
         self.clear_crop_button.clicked.connect(self.clear_current_range_crop) # New method needed
         left_panel.addWidget(self.clear_crop_button)
 
-        self.export_all_checkbox = QCheckBox("Export All Ranges as Defined") 
-        self.export_all_checkbox.setToolTip("Exports all ranges just once. If they have a crop rect defined, then they are exported cropped. If they don't have a crop rect defined, they are exported uncropped.")
+        self.export_all_checkbox = QCheckBox("Export All Ranges as Defined")
+        self.export_all_checkbox.setToolTip(
+            "Exports all ranges exactly once.\n"
+            "• Ranges WITH a crop rect → exported cropped.\n"
+            "• Ranges WITHOUT a crop rect → exported uncropped."
+        )
         self.export_all_checkbox.setChecked(True)
         left_panel.addWidget(self.export_all_checkbox)
 
-        self.export_cropped_checkbox = QCheckBox("Export Cropped Ranges Only") # Keep concept
-        self.export_cropped_checkbox.setToolTip("Exports all ranges with a crop region. Does not export ranges without crop data.")
+        self.export_cropped_checkbox = QCheckBox("Export Cropped Ranges Only")
+        self.export_cropped_checkbox.setToolTip(
+            "Exports only the ranges that have a crop region defined.\n"
+            "Ranges without crop data are skipped."
+        )
         self.export_cropped_checkbox.setChecked(False)
         left_panel.addWidget(self.export_cropped_checkbox)
 
-        self.export_uncropped_checkbox = QCheckBox("Export All Ranges Uncropped") # Keep concept
-        self.export_uncropped_checkbox.setToolTip("Exports all defined ranges uncropped, regardless of whether they have a crop defined or not.")
+        self.export_uncropped_checkbox = QCheckBox("Export All Ranges Uncropped")
+        self.export_uncropped_checkbox.setToolTip(
+            "Exports all defined ranges as full-frame (uncropped) clips,\n"
+            "regardless of whether a crop region is defined."
+        )
         self.export_uncropped_checkbox.setChecked(False)
         left_panel.addWidget(self.export_uncropped_checkbox)
 
-        self.export_image_checkbox = QCheckBox("Export Image at Start Frame") # Text updated
+        self.export_image_checkbox = QCheckBox("Export Image at Start Frame")
         self.export_image_checkbox.setChecked(False)
         left_panel.addWidget(self.export_image_checkbox)
 
@@ -518,7 +528,7 @@ class VideoCropper(QWidget):
         # If fixed mode IS active, and this is somehow called, the scene's aspect ratio
         # should already be correctly set by toggle_fixed_resolution_mode.
         # No need for an else block to re-assert, as the combobox is disabled.
-    
+
     def clear_crop_region_controller(self):
         """
         Remove all interactive crop region items from the scene.

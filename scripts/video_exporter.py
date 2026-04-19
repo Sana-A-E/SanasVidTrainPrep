@@ -250,376 +250,417 @@ class VideoExporter:
             # print(f"    ℹ️ No caption provided or generated for {output_file}.")
 
     def export_videos(self):
-        """Exports selected videos based on their defined ranges and UI settings."""
-        # --- Pre-checks and Folder Setup ---
-        export_cropped_flag = self.main_app.export_cropped_checkbox.isChecked()
+        """
+        Exports selected (checked) videos based on their defined ranges and UI settings.
+
+        Supported export modes (mutually exclusive checkboxes):
+        - **Export All Ranges as Defined** – each range exported cropped if a crop
+          rect is stored, otherwise exported uncropped.
+        - **Export Cropped Ranges Only** – only ranges with a crop rect are exported.
+        - **Export All Ranges Uncropped** – all ranges exported as full-frame clips.
+
+        Additionally, "Export Image at Start Frame" and "Generate Gemini Caption" can
+        be combined with any of the above modes.
+        """
+        # --- Read export-mode flags ---
+        export_all_flag      = self.main_app.export_all_checkbox.isChecked()
+        export_cropped_flag  = self.main_app.export_cropped_checkbox.isChecked()
         export_uncropped_flag = self.main_app.export_uncropped_checkbox.isChecked()
-        export_image_flag = self.main_app.export_image_checkbox.isChecked()
+        export_image_flag    = self.main_app.export_image_checkbox.isChecked()
         generate_gemini_flag = self.main_app.gemini_caption_checkbox.isChecked()
 
-        if not export_cropped_flag and not export_uncropped_flag and not export_image_flag:
-            QMessageBox.warning(self.main_app, "Nothing to Export", "Please check at least one export option (Cropped, Uncropped, or Image).")
+        # At least one video-export mode or image export must be active.
+        if not export_all_flag and not export_cropped_flag and not export_uncropped_flag and not export_image_flag:
+            QMessageBox.warning(
+                self.main_app, "Nothing to Export",
+                "Please check at least one export option (Export All, Cropped, Uncropped, or Image)."
+            )
             return
-            
-        # Check Gemini API Key if Gemini generation is requested upfront
+
+        # Validate Gemini API key upfront when captioning is requested.
         if generate_gemini_flag:
             if not self.main_app.gemini_api_key_input.text():
-                QMessageBox.warning(self.main_app, "API Key Missing", "Please enter your Gemini API key to generate descriptions/captions.")
-                # Proceed but Gemini calls will fail later
-            # Configure Gemini once at the start if the key is present and not already configured
+                QMessageBox.warning(
+                    self.main_app, "API Key Missing",
+                    "Please enter your Gemini API key to generate descriptions/captions."
+                )
             elif not self.gemini_model:
-                self._configure_gemini() # Attempt configuration
+                self._configure_gemini()
 
-        # Define output folders
+        # --- Define and create output folders ---
         base_folder = self.main_app.folder_path
         if not base_folder or not os.path.isdir(base_folder):
             QMessageBox.critical(self.main_app, "Error", "Invalid base folder path selected.")
             return
-             
-        output_folder_cropped = os.path.normpath(os.path.join(base_folder, "cropped"))
+
+        output_folder_cropped  = os.path.normpath(os.path.join(base_folder, "cropped"))
         output_folder_uncropped = os.path.normpath(os.path.join(base_folder, "uncropped"))
-        # Create folders only if needed by selected options
-        if export_cropped_flag or (export_image_flag and export_cropped_flag):
+
+        # "Export All" may write to both folders depending on each range's crop status.
+        need_cropped_folder  = export_all_flag or export_cropped_flag
+        need_uncropped_folder = export_all_flag or export_uncropped_flag
+        if need_cropped_folder:
             os.makedirs(output_folder_cropped, exist_ok=True)
-        if export_uncropped_flag or (export_image_flag and export_uncropped_flag):
+        if need_uncropped_folder:
             os.makedirs(output_folder_uncropped, exist_ok=True)
 
-        # Reset file counter (used if filename prefix is active)
+        # --- Collect checked videos and their ranges ---
         self.file_counter = 0
         items_to_export = []
 
-        # --- Collect Selected Videos and Their Ranges ---
-        selected_rows = {self.main_app.video_list.row(item) for item in self.main_app.video_list.selectedItems()} # Use selectedItems for clarity
-        
         for i in range(self.main_app.video_list.count()):
             item = self.main_app.video_list.item(i)
-            # Process checked items (using check state is more reliable for export intent)
-            if item.checkState() == Qt.CheckState.Checked: 
-                # Find corresponding entry in video_files (assuming order matches list index)
-                if i >= len(self.main_app.video_files):
-                     print(f"⚠️ Skipping checked item at index {i}: Mismatch with video_files data.")
-                     continue
-                video_entry = self.main_app.video_files[i] 
-                original_path = video_entry.get("original_path")
-                display_name = video_entry.get("display_name")
-                
-                if not original_path or not os.path.exists(original_path):
-                    print(f"⚠️ Skipping invalid video entry: {display_name} (Path: {original_path})")
-                    continue
-                    
-                # Get ranges for this video's original path
-                video_ranges = self.main_app.video_data.get(original_path, {}).get("ranges", [])
-                if not video_ranges:
-                    print(f"ℹ️ No ranges defined for selected video: {display_name}. Skipping.")
-                    continue
-                    
-                items_to_export.append({
-                    "original_path": original_path,
-                    "display_name": display_name, # Base display name for filename generation
-                    "ranges": video_ranges
-                })
+            if item.checkState() != Qt.CheckState.Checked:
+                continue
+            if i >= len(self.main_app.video_files):
+                print(f"⚠️ Skipping checked item at index {i}: Mismatch with video_files data.")
+                continue
+            video_entry  = self.main_app.video_files[i]
+            original_path = video_entry.get("original_path")
+            display_name  = video_entry.get("display_name")
+            if not original_path or not os.path.exists(original_path):
+                print(f"⚠️ Skipping invalid video entry: {display_name} (Path: {original_path})")
+                continue
+            video_ranges = self.main_app.video_data.get(original_path, {}).get("ranges", [])
+            if not video_ranges:
+                print(f"ℹ️ No ranges defined for selected video: {display_name}. Skipping.")
+                continue
+            items_to_export.append({
+                "original_path": original_path,
+                "display_name":  display_name,
+                "ranges":        video_ranges,
+            })
 
         if not items_to_export:
-             QMessageBox.information(self.main_app, "Nothing Selected", "Please select (check) at least one video file with defined ranges to export.")
-             return
-             
+            QMessageBox.information(
+                self.main_app, "Nothing Selected",
+                "Please select (check) at least one video file with defined ranges to export."
+            )
+            return
+
         print(f"--- Starting Export Process for {len(items_to_export)} video source(s) ---")
 
-        # --- Process Each Selected Video Source ---
+        # ------------------------------------------------------------------ #
+        # Helper: build the FFmpeg scale filter params for the current UI     #
+        # state (fixed-res mode takes precedence over aspect-ratio dropdown). #
+        # ------------------------------------------------------------------ #
+        def _resolve_scale_params(segment_w, segment_h):
+            """
+            Returns (scale_params, apply_scaling) based on Fixed Resolution mode
+            or the aspect-ratio combo selection.
+
+            :param segment_w: Width of the segment (original or cropped).
+            :param segment_h: Height of the segment (original or cropped).
+            :returns: Tuple of (list[str], bool).
+            """
+            fixed_w = getattr(self.main_app, 'fixed_export_width', None)
+            fixed_h = getattr(self.main_app, 'fixed_export_height', None)
+            if fixed_w is not None and fixed_h is not None:
+                tw = max(2, (fixed_w // 2) * 2)
+                th = max(2, (fixed_h // 2) * 2)
+                print(f"      Scaling (Fixed Res): {tw}x{th}")
+                return [str(tw), str(th)], True
+
+            ratio_text  = self.main_app.aspect_ratio_combo.currentText()
+            ratio_value = self.main_app.aspect_ratios.get(ratio_text)
+            if isinstance(ratio_value, (float, int)):
+                if ratio_value >= 1.0:
+                    tw = segment_w
+                    th = round(segment_w / ratio_value)
+                else:
+                    th = segment_h
+                    tw = round(segment_h * ratio_value)
+                tw = max(2, (tw // 2) * 2)
+                th = max(2, (th // 2) * 2)
+                if tw > 0 and th > 0:
+                    print(f"      Scaling (Aspect Ratio {ratio_text}): {tw}x{th} "
+                          f"based on segment {segment_w}x{segment_h}")
+                    return [str(tw), str(th)], True
+            return [], False
+
+        # ------------------------------------------------------------------ #
+        # Helper: run FFmpeg to export a video segment (cropped or full).     #
+        # ------------------------------------------------------------------ #
+        def _ffmpeg_export(src_path, out_path, ss, t, out_fps, crop=None, seg_w=0, seg_h=0):
+            """
+            Exports a video segment using FFmpeg.
+
+            :param src_path: Absolute path to the source video file.
+            :param out_path: Absolute path for the output file.
+            :param ss: Start time in seconds.
+            :param t: Duration in seconds.
+            :param out_fps: Target frame-rate.
+            :param crop: Optional (x, y, w, h) tuple; when provided the crop
+                         filter is applied before scaling.
+            :param seg_w: Width of the segment (post-crop if crop is given, else original).
+            :param seg_h: Height of the segment (post-crop if crop is given, else original).
+            :returns: True on success, False on failure.
+            """
+            try:
+                stream = ffmpeg.input(src_path, ss=ss, t=t)
+                stream = stream.filter('fps', fps=out_fps, round='up')
+                if crop is not None:
+                    x_c, y_c, w_c, h_c = crop
+                    stream = stream.filter('crop', w_c, h_c, x_c, y_c)
+                scale_params, apply_scaling = _resolve_scale_params(seg_w, seg_h)
+                if apply_scaling and scale_params:
+                    stream = stream.filter('scale', *scale_params)
+                    stream = stream.filter('setsar', '1')
+                stream = stream.output(
+                    out_path, r=out_fps, vsync='cfr', map_metadata='-1',
+                    **{'c:v': 'libx264', 'preset': 'medium', 'crf': 23}
+                )
+                stream.run(overwrite_output=True, quiet=True)
+                return True
+            except ffmpeg.Error as e:
+                print(f"    ❌ FFmpeg error: {e.stderr.decode('utf8', errors='ignore')}")
+                return False
+            except Exception as e:
+                print(f"    ❌ Unexpected error: {e}")
+                return False
+
+        # ------------------------------------------------------------------ #
+        # Process each selected video source                                   #
+        # ------------------------------------------------------------------ #
         for video_info in items_to_export:
-            original_path = video_info["original_path"]
-            base_display_name = video_info["display_name"] # Display name of the item in the list
-            ranges = video_info["ranges"]
+            original_path    = video_info["original_path"]
+            base_display_name = video_info["display_name"]
+            ranges           = video_info["ranges"]
             print(f"Processing Source: {base_display_name} ({len(ranges)} ranges)")
-            
+
             cap = None
             try:
-                # Open video capture once per source file
                 cap = cv2.VideoCapture(original_path)
                 if not cap.isOpened():
                     print(f"❌ ERROR: Could not open video source {original_path}. Skipping.")
                     continue
-                     
+
                 fps = cap.get(cv2.CAP_PROP_FPS)
                 orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                 orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                 total_source_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                output_fps = round(fps) if fps > 0 else 30 # Ensure valid FPS
-                if output_fps < 1: output_fps = 1
-                print(f"   Source FPS: {fps:.2f}, Output FPS: {output_fps}, Total Frames: {total_source_frames}")
+                output_fps = max(1, round(fps)) if fps > 0 else 30
+                print(f"   Source FPS: {fps:.2f}, Output FPS: {output_fps}, "
+                      f"Total Frames: {total_source_frames}")
 
-                # --- Loop Through Each Range Defined for this Video ---
                 for range_data in ranges:
-                    range_id = range_data["id"]
                     start_frame = range_data.get("start", 0)
-                    end_frame = range_data.get("end", 0)
-                    crop_tuple = range_data.get("crop") # Can be None
-                    range_index = range_data.get("index", "X") # For filename
-                    print(f"  Processing Range {range_index} [{start_frame}-{end_frame}], Crop: {crop_tuple is not None}")
-                    
-                    # Validate range frames against actual source length
+                    end_frame   = range_data.get("end", 0)
+                    crop_tuple  = range_data.get("crop")        # May be None
+                    range_index = range_data.get("index", "X")  # For filename
+                    print(f"  Processing Range {range_index} [{start_frame}-{end_frame}], "
+                          f"Crop defined: {crop_tuple is not None}")
+
+                    # --- Validate range ---
                     if start_frame < 0 or start_frame >= total_source_frames:
-                        print(f"    ⚠️ Skipping range: Start frame ({start_frame}) out of bounds (0-{total_source_frames-1}).")
+                        print(f"    ⚠️ Skipping range: start ({start_frame}) out of bounds.")
                         continue
                     if end_frame <= start_frame:
-                         print(f"    ⚠️ Skipping range: End frame ({end_frame}) must be greater than Start frame ({start_frame}).")
-                         continue
-                         
-                    end_frame = min(end_frame, total_source_frames) # Clamp end frame to actual video length
-                    if end_frame <= start_frame: # Double check after clamping
-                         print(f"    ⚠️ Skipping range: End frame ({end_frame}) became <= Start frame ({start_frame}) after clamping.")
-                         continue
-                         
+                        print(f"    ⚠️ Skipping range: end ({end_frame}) ≤ start ({start_frame}).")
+                        continue
+                    end_frame = min(end_frame, total_source_frames)
+                    if end_frame <= start_frame:
+                        print(f"    ⚠️ Skipping range: end ({end_frame}) ≤ start after clamping.")
+                        continue
+
                     duration_frames = end_frame - start_frame
-                    
-                    # --- Generate Base Output Filename for this Range ---
+                    ss = start_frame / fps if fps > 0 else 0
+                    t  = duration_frames / fps if fps > 0 else 0
+
+                    # --- Build base output filename ---
                     prefix = getattr(self.main_app, 'export_prefix', '').strip()
                     if prefix:
                         self.file_counter += 1
-                        # Incorporate range index into prefixed name
                         base_output_name = f"{prefix}_{self.file_counter:05d}_range{range_index}"
                     else:
-                        # Use the display name from the list (which might include _copyX)
-                        base_name_for_file, _ = os.path.splitext(base_display_name)
-                        # Add range index to differentiate outputs from same list item (if it has multiple ranges)
-                        base_output_name = f"{base_name_for_file}_range{range_index}"
-                         
-                    # Common variables for this range's export
-                    ss = start_frame / fps if fps > 0 else 0 # Start time in seconds
-                    t = duration_frames / fps if fps > 0 else 0 # Duration in seconds
-                    image_paths_for_gemini = [] # Track images needing Gemini captioning for this range
-                    video_path_for_gemini = None # Track video needing Gemini description for this range
+                        base_name_no_ext, _ = os.path.splitext(base_display_name)
+                        base_output_name = f"{base_name_no_ext}_range{range_index}"
 
-                    # --- 1. Export Image (if requested) ---
+                    _, ext = os.path.splitext(original_path)
+                    image_paths_for_gemini = []
+                    video_path_for_gemini  = None
+
+                    # -------------------------------------------------------- #
+                    # 1. IMAGE EXPORT (start frame)                             #
+                    # -------------------------------------------------------- #
                     if export_image_flag:
                         print(f"    Attempting image export for frame {start_frame}...")
                         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
                         ret_img, frame = cap.read()
                         if ret_img and frame is not None:
-                            # Export Cropped Image?
-                            if export_cropped_flag and crop_tuple:
+
+                            # Determine whether to apply crop for the image in "Export All" mode.
+                            do_crop_image = (
+                                (export_all_flag and crop_tuple is not None) or
+                                (export_cropped_flag and crop_tuple is not None)
+                            )
+                            do_uncrop_image = (
+                                (export_all_flag and crop_tuple is None) or
+                                export_uncropped_flag
+                            )
+
+                            if do_crop_image:
                                 x, y, w, h = crop_tuple
                                 if x < 0 or y < 0 or w <= 0 or h <= 0 or x+w > orig_w or y+h > orig_h:
-                                    print(f"      ⚠️ Invalid crop region for image export in range {range_index}")
+                                    print(f"      ⚠️ Invalid crop for image export in range {range_index}")
                                 else:
                                     cropped_frame = frame[y:y+h, x:x+w]
                                     if cropped_frame.size > 0:
                                         img_name = f"{base_output_name}_cropped.png"
-                                        img_path = os.path.normpath(os.path.join(output_folder_cropped, img_name))
+                                        img_path = os.path.normpath(
+                                            os.path.join(output_folder_cropped, img_name))
                                         try:
                                             cv2.imwrite(img_path, cropped_frame)
                                             print(f"      🖼️ Exported Cropped Image: {os.path.basename(img_path)}")
                                             if generate_gemini_flag:
                                                 image_paths_for_gemini.append(img_path)
                                             else:
-                                                self.write_caption(img_path) # Write simple caption
+                                                self.write_caption(img_path)
                                         except Exception as e:
-                                            print(f"      ❌ Error writing cropped image {img_path}: {e}")
-                                    else: print(f"      ⚠️ Empty crop frame for image in range {range_index}")
-                                    
-                            # Export Uncropped Image?
-                            if export_uncropped_flag:
+                                            print(f"      ❌ Error writing cropped image: {e}")
+                                    else:
+                                        print(f"      ⚠️ Empty crop frame for image in range {range_index}")
+
+                            if do_uncrop_image:
                                 img_name = f"{base_output_name}.png"
-                                img_path = os.path.normpath(os.path.join(output_folder_uncropped, img_name))
+                                img_path = os.path.normpath(
+                                    os.path.join(output_folder_uncropped, img_name))
                                 try:
                                     cv2.imwrite(img_path, frame)
                                     print(f"      🖼️ Exported Uncropped Image: {os.path.basename(img_path)}")
-                                    # Add for Gemini only if not already added (avoids duplicate captions if both exported)
-                                    if generate_gemini_flag and img_path not in image_paths_for_gemini: 
+                                    if generate_gemini_flag and img_path not in image_paths_for_gemini:
                                         image_paths_for_gemini.append(img_path)
                                     elif not generate_gemini_flag:
-                                        self.write_caption(img_path) # Write simple caption
+                                        self.write_caption(img_path)
                                 except Exception as e:
-                                    print(f"      ❌ Error writing uncropped image {img_path}: {e}")
+                                    print(f"      ❌ Error writing uncropped image: {e}")
                         else:
                             print(f"    ⚠️ Could not read frame {start_frame} for image export.")
 
-                    # --- 2. Export Cropped Video (if requested) ---
-                    exported_cropped_video = False
-                    if export_cropped_flag and crop_tuple:
-                        x_crop, y_crop, w_crop, h_crop = crop_tuple # Unpack for clarity in prints
-                        print(f"[DEBUG export_videos] Using crop_tuple for FFmpeg: x={x_crop}, y={y_crop}, w={w_crop}, h={h_crop}")
-                        print(f"[DEBUG export_videos] Video original dims in exporter context: {orig_w}x{orig_h}")
-
-                        # Basic validation for crop dimensions
-                        if x_crop < 0 or y_crop < 0 or w_crop <= 0 or h_crop <= 0 or x_crop + w_crop > orig_w or y_crop + h_crop > orig_h:
-                            print(f"    ⚠️ Invalid crop dimensions {crop_tuple} for range {range_index}. Skipping cropped video export.")
-                        else:
-                            _, ext = os.path.splitext(original_path)
-                            output_name = f"{base_output_name}_cropped{ext}"
-                            output_path = os.path.normpath(os.path.join(output_folder_cropped, output_name))
-                            print(f"    🎬 Exporting Cropped Video: {output_name}...")
-                            try:
-                                stream = ffmpeg.input(original_path, ss=ss, t=t)
-                                stream = stream.filter('fps', fps=output_fps, round='up')
-                                
-                                # Apply crop first
-                                stream = stream.filter('crop', w_crop, h_crop, x_crop, y_crop)
-
-                                # Determine scaling based on mode (fixed or longest_edge/aspect_ratio)
-                                fixed_w_export = getattr(self.main_app, 'fixed_export_width', None)
-                                fixed_h_export = getattr(self.main_app, 'fixed_export_height', None)
-                                scale_params = []
-                                apply_scaling = False
-
-                                if fixed_w_export is not None and fixed_h_export is not None:
-                                    target_w = max(2, (fixed_w_export // 2) * 2)
-                                    target_h = max(2, (fixed_h_export // 2) * 2)
-                                    scale_params = [str(target_w), str(target_h)]
-                                    apply_scaling = True
-                                    print(f"      Scaling (Fixed Res): {target_w}x{target_h}")
-                                else:
-                                    # Not fixed mode, check aspect ratio dropdown
-                                    selected_ratio_text = self.main_app.aspect_ratio_combo.currentText()
-                                    ratio_value = self.main_app.aspect_ratios.get(selected_ratio_text)
-
-                                    if isinstance(ratio_value, (float, int)):
-                                        # A specific numeric aspect ratio is chosen (e.g., 16/9, 1.0)
-                                        # For uncropped, scale based on original segment dimensions (orig_w, orig_h)
-                                        target_w, target_h = -1, -1
-                                        if ratio_value >= 1.0: # Landscape or square
-                                            target_w = orig_w # Use original width of the segment
-                                            target_h = round(orig_w / ratio_value)
-                                        else: # Portrait
-                                            target_h = orig_h # Use original height of the segment
-                                            target_w = round(orig_h * ratio_value)
-
-                                        target_w = max(2, (target_w // 2) * 2)
-                                        target_h = max(2, (target_h // 2) * 2)
-                                        if target_w > 0 and target_h > 0:
-                                            scale_params = [str(target_w), str(target_h)]
-                                            apply_scaling = True
-                                            print(f"      Scaling (Aspect Ratio {selected_ratio_text}): {target_w}x{target_h} based on original {orig_w}x{orig_h}")
-                                    # If ratio_value is "original" or None (Free-form), no scaling based on aspect ratio here.
-
-                                if apply_scaling and scale_params:
-                                    stream = stream.filter('scale', *scale_params)
-                                    stream = stream.filter('setsar', '1') # Apply SAR separately
-                                     
-                                stream = stream.output(output_path, r=output_fps, vsync='cfr', map_metadata='-1', **{'c:v': 'libx264', 'preset': 'medium', 'crf': 23})
-                                stream.run(overwrite_output=True, quiet=True)
-                                
-                                print(f"      ✅ Exported Cropped Video: {os.path.basename(output_path)}")
-                                video_path_for_gemini = output_path # Prioritize cropped for Gemini
-                                exported_cropped_video = True
-                                if not generate_gemini_flag:
-                                    self.write_caption(output_path) # Write simple caption
-
-                            except ffmpeg.Error as e:
-                                print(f"    ❌ Error exporting cropped {output_name}: {e.stderr.decode('utf8', errors='ignore')}")
-                            except Exception as e:
-                                print(f"    ❌ Unexpected error exporting cropped {output_name}: {e}")
-
-                    # --- 3. Export Uncropped Video (if requested) ---
-                    if export_uncropped_flag:
-                        _, ext = os.path.splitext(original_path)
-                        output_name = f"{base_output_name}{ext}"
-                        output_path = os.path.normpath(os.path.join(output_folder_uncropped, output_name))
-                        print(f"    🎬 Exporting Uncropped Video: {output_name}...")
-                        try:
-                            stream = ffmpeg.input(original_path, ss=ss, t=t)
-                            stream = stream.filter('fps', fps=output_fps, round='up')
-                            
-                            # Apply crop if it exists AND if user wants uncropped to also respect selection for scaling
-                            # Current logic: uncropped means full frame from source, then scaled.
-                            # If user wants uncropped *selection* then scaled, crop_tuple should be applied here.
-                            # For now, assume uncropped means full frame, then scaled.
-
-                            # Determine scaling based on mode (fixed or longest_edge/aspect_ratio)
-                            fixed_w_export = getattr(self.main_app, 'fixed_export_width', None)
-                            fixed_h_export = getattr(self.main_app, 'fixed_export_height', None)
-                            scale_params = []
-                            apply_scaling = False
-
-                            if fixed_w_export is not None and fixed_h_export is not None:
-                                target_w = max(2, (fixed_w_export // 2) * 2)
-                                target_h = max(2, (fixed_h_export // 2) * 2)
-                                scale_params = [str(target_w), str(target_h)]
-                                apply_scaling = True
-                                print(f"      Scaling (Fixed Res): {target_w}x{target_h}")
+                    # -------------------------------------------------------- #
+                    # 2. VIDEO EXPORT — "Export All" mode                       #
+                    # -------------------------------------------------------- #
+                    if export_all_flag:
+                        if crop_tuple is not None:
+                            # Range has a crop rect → export as cropped clip.
+                            x_c, y_c, w_c, h_c = crop_tuple
+                            if x_c < 0 or y_c < 0 or w_c <= 0 or h_c <= 0 \
+                                    or x_c + w_c > orig_w or y_c + h_c > orig_h:
+                                print(f"    ⚠️ Invalid crop dimensions {crop_tuple} for range "
+                                      f"{range_index}. Skipping cropped export.")
                             else:
-                                # Not fixed mode, check aspect ratio dropdown
-                                selected_ratio_text = self.main_app.aspect_ratio_combo.currentText()
-                                ratio_value = self.main_app.aspect_ratios.get(selected_ratio_text)
+                                out_name = f"{base_output_name}_cropped{ext}"
+                                out_path = os.path.normpath(
+                                    os.path.join(output_folder_cropped, out_name))
+                                print(f"    🎬 [Export All] Exporting Cropped Video: {out_name}...")
+                                if _ffmpeg_export(
+                                    original_path, out_path, ss, t, output_fps,
+                                    crop=crop_tuple, seg_w=w_c, seg_h=h_c
+                                ):
+                                    print(f"      ✅ Exported Cropped Video: {os.path.basename(out_path)}")
+                                    video_path_for_gemini = out_path
+                                    if not generate_gemini_flag:
+                                        self.write_caption(out_path)
+                        else:
+                            # Range has no crop rect → export as full-frame clip.
+                            out_name = f"{base_output_name}{ext}"
+                            out_path = os.path.normpath(
+                                os.path.join(output_folder_uncropped, out_name))
+                            print(f"    🎬 [Export All] Exporting Uncropped Video: {out_name}...")
+                            if _ffmpeg_export(
+                                original_path, out_path, ss, t, output_fps,
+                                crop=None, seg_w=orig_w, seg_h=orig_h
+                            ):
+                                print(f"      ✅ Exported Uncropped Video: {os.path.basename(out_path)}")
+                                video_path_for_gemini = out_path
+                                if not generate_gemini_flag:
+                                    self.write_caption(out_path)
 
-                                if isinstance(ratio_value, (float, int)):
-                                    # A specific numeric aspect ratio is chosen (e.g., 16/9, 1.0)
-                                    # For uncropped, scale based on original segment dimensions (orig_w, orig_h)
-                                    target_w, target_h = -1, -1
-                                    if ratio_value >= 1.0: # Landscape or square
-                                        target_w = orig_w # Use original width of the segment
-                                        target_h = round(orig_w / ratio_value)
-                                    else: # Portrait
-                                        target_h = orig_h # Use original height of the segment
-                                        target_w = round(orig_h * ratio_value)
+                    # -------------------------------------------------------- #
+                    # 3. VIDEO EXPORT — "Export Cropped Only" mode              #
+                    # -------------------------------------------------------- #
+                    if export_cropped_flag and crop_tuple is not None:
+                        x_c, y_c, w_c, h_c = crop_tuple
+                        if x_c < 0 or y_c < 0 or w_c <= 0 or h_c <= 0 \
+                                or x_c + w_c > orig_w or y_c + h_c > orig_h:
+                            print(f"    ⚠️ Invalid crop dimensions {crop_tuple} for range "
+                                  f"{range_index}. Skipping cropped video export.")
+                        else:
+                            out_name = f"{base_output_name}_cropped{ext}"
+                            out_path = os.path.normpath(
+                                os.path.join(output_folder_cropped, out_name))
+                            print(f"    🎬 Exporting Cropped Video: {out_name}...")
+                            if _ffmpeg_export(
+                                original_path, out_path, ss, t, output_fps,
+                                crop=crop_tuple, seg_w=w_c, seg_h=h_c
+                            ):
+                                print(f"      ✅ Exported Cropped Video: {os.path.basename(out_path)}")
+                                video_path_for_gemini = out_path
+                                if not generate_gemini_flag:
+                                    self.write_caption(out_path)
 
-                                    target_w = max(2, (target_w // 2) * 2)
-                                    target_h = max(2, (target_h // 2) * 2)
-                                    if target_w > 0 and target_h > 0:
-                                        scale_params = [str(target_w), str(target_h)]
-                                        apply_scaling = True
-                                        print(f"      Scaling (Aspect Ratio {selected_ratio_text}): {target_w}x{target_h} based on original {orig_w}x{orig_h}")
-                                # If ratio_value is "original" or None (Free-form), no scaling based on aspect ratio here.
-
-                            if apply_scaling and scale_params:
-                                stream = stream.filter('scale', *scale_params)
-                                stream = stream.filter('setsar', '1') # Apply SAR separately
-
-                            stream = stream.output(output_path, r=output_fps, vsync='cfr', map_metadata='-1', **{'c:v': 'libx264', 'preset': 'medium', 'crf': 23})
-                            stream.run(overwrite_output=True, quiet=True)
-                             
-                            print(f"      ✅ Exported Uncropped Video: {os.path.basename(output_path)}")
-                            if video_path_for_gemini is None: # Use uncropped for Gemini only if cropped wasn't made
-                                video_path_for_gemini = output_path
+                    # -------------------------------------------------------- #
+                    # 4. VIDEO EXPORT — "Export All Uncropped" mode             #
+                    # -------------------------------------------------------- #
+                    if export_uncropped_flag:
+                        out_name = f"{base_output_name}{ext}"
+                        out_path = os.path.normpath(
+                            os.path.join(output_folder_uncropped, out_name))
+                        print(f"    🎬 Exporting Uncropped Video: {out_name}...")
+                        if _ffmpeg_export(
+                            original_path, out_path, ss, t, output_fps,
+                            crop=None, seg_w=orig_w, seg_h=orig_h
+                        ):
+                            print(f"      ✅ Exported Uncropped Video: {os.path.basename(out_path)}")
+                            if video_path_for_gemini is None:
+                                video_path_for_gemini = out_path
                             if not generate_gemini_flag:
-                                self.write_caption(output_path) # Write simple caption
-                                 
-                        except ffmpeg.Error as e:
-                            print(f"    ❌ Error exporting uncropped {output_name}: {e.stderr.decode('utf8', errors='ignore')}")
-                        except Exception as e:
-                            print(f"    ❌ Unexpected error exporting uncropped {output_name}: {e}")
+                                self.write_caption(out_path)
 
-                    # --- 4. Generate Gemini Descriptions/Captions (if requested for this range) ---
+                    # -------------------------------------------------------- #
+                    # 5. Gemini captioning / description                        #
+                    # -------------------------------------------------------- #
                     if generate_gemini_flag:
-                        # --- Video Description ---
-                        if video_path_for_gemini: # If a video (cropped or uncropped) was successfully exported
-                            print(f"    🤖 Generating Gemini description for video: {os.path.basename(video_path_for_gemini)}...")
+                        if video_path_for_gemini:
+                            print(f"    🤖 Generating Gemini description for video: "
+                                  f"{os.path.basename(video_path_for_gemini)}...")
                             description = self.generate_gemini_video_description(video_path_for_gemini)
                             if description:
                                 self.write_caption(video_path_for_gemini, caption_content=description)
                             else:
-                                print(f"      ⚠️ Failed Gemini video description. Writing simple caption.")
-                                self.write_caption(video_path_for_gemini) # Fallback to simple
-                                
-                        # --- Image Caption(s) ---
-                        elif image_paths_for_gemini: # Only do image caption if NO video was suitable for Gemini
-                            print(f"    🤖 Generating Gemini caption(s) for {len(image_paths_for_gemini)} image(s)...")
+                                print(f"      ⚠️ Gemini description failed. Writing simple caption.")
+                                self.write_caption(video_path_for_gemini)
+                        elif image_paths_for_gemini:
+                            print(f"    🤖 Generating Gemini caption(s) for "
+                                  f"{len(image_paths_for_gemini)} image(s)...")
                             for img_path in image_paths_for_gemini:
                                 caption = self.generate_gemini_caption(img_path)
                                 if caption:
                                     self.write_caption(img_path, caption_content=caption)
                                 else:
-                                    print(f"      ⚠️ Failed Gemini image caption for {os.path.basename(img_path)}. Writing simple caption.")
-                                    self.write_caption(img_path) # Fallback to simple
-                                    
-                    # --- End of processing for this range ---
+                                    print(f"      ⚠️ Gemini caption failed for "
+                                          f"{os.path.basename(img_path)}. Writing simple caption.")
+                                    self.write_caption(img_path)
+
                     print(f"  Finished Range {range_index}.")
-                    
+
             except Exception as e:
                 print(f"❌ UNEXPECTED ERROR processing source {base_display_name}: {e}")
                 import traceback
                 traceback.print_exc()
             finally:
-                # Release video capture object for the source file
                 if cap and cap.isOpened():
                     cap.release()
                     print(f"   Released video source: {base_display_name}")
-                     
-        # --- End of Export Process --- 
-        print(f"--- Export Process Finished ---")
-        QMessageBox.information(self.main_app, "Export Complete", "Finished exporting selected video ranges.")
+
+        print("--- Export Process Finished ---")
+        QMessageBox.information(
+            self.main_app, "Export Complete",
+            "Finished exporting selected video ranges."
+        )
 
     def export_first_frames_of_ranges_as_images(self):
+
         """
         Exports the first frame of each range for the selected (checked) videos.
         Applies range crop and fixed resolution if active.
