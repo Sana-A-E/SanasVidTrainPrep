@@ -570,7 +570,6 @@ class VideoCropper(QWidget):
              print(f"⚠️ Invalid crop coordinates calculated: ({x},{y},{w},{h}). Clamping/adjusting might be needed.")
              x = max(0, x)
              y = max(0, y)
-             w = min(w, self.original_width - x)
              h = min(h, self.original_height - y)
              if w <= 0 or h <= 0:
                  print("   Crop invalid even after clamping. Discarding crop action.")
