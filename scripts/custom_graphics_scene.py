@@ -107,7 +107,12 @@ class CustomGraphicsScene(QGraphicsScene):
                 self.crop_item = InteractiveCropRegion(rect, aspect_ratio=self.aspect_ratio)
                 self.addItem(self.crop_item)
                 if hasattr(self.parent_widget, "crop_rect_finalized"):
-                    self.parent_widget.crop_rect_finalized(self.crop_item.sceneBoundingRect())
+                    # Use the actual drawn rect, NOT sceneBoundingRect() which is
+                    # inflated by HANDLE_SIZE/2 on every side and would cause the
+                    # stored crop coordinates to be larger than what was drawn.
+                    self.parent_widget.crop_rect_finalized(
+                        self.crop_item.mapRectToScene(self.crop_item.rect())
+                    )
             event.accept()
         else:
             self.start_point = None

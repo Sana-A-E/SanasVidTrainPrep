@@ -222,11 +222,52 @@ class InteractiveCropRegion(QGraphicsRectItem):
             # which is expanded by HANDLE_SIZE/2 + pen width on every side.
             self.scene().parent_widget.crop_rect_finalized(self.mapRectToScene(self.rect()))
 
+    def itemChange(self, change, value):
+        """
+        Intercept ItemPositionChange (fires before every move, including moveBy and
+        Qt's built-in drag) to clamp the item so its *actual drawn rect* never leaves
+        the scene boundaries.
+
+        Using ItemPositionChange (not ItemPositionHasChanged) lets us return an
+        adjusted QPointF and avoids any risk of recursive callbacks.
+        """
+        if change == QGraphicsRectItem.GraphicsItemChange.ItemPositionChange and self.scene():
+            new_pos = value  # proposed new position (QPointF) in parent/scene coords
+            r = self.rect()  # local rect (top-left may not be at 0,0)
+            # Where the actual drawn rect would be in scene space at new_pos.
+            # This assumes no rotation/scale on the item (which we never apply).
+            proposed = QRectF(
+                new_pos.x() + r.x(),
+                new_pos.y() + r.y(),
+                r.width(),
+                r.height()
+            )
+            bounds = self.scene().sceneRect()
+            dx, dy = 0.0, 0.0
+            if proposed.left() < bounds.left():
+                dx = bounds.left() - proposed.left()
+            if proposed.top() < bounds.top():
+                dy = bounds.top() - proposed.top()
+            if proposed.right() > bounds.right():
+                dx = bounds.right() - proposed.right()
+            if proposed.bottom() > bounds.bottom():
+                dy = bounds.bottom() - proposed.bottom()
+            if dx or dy:
+                return QPointF(new_pos.x() + dx, new_pos.y() + dy)
+        return super().itemChange(change, value)
+
     def clamp_to_scene_bounds(self):
-        """Adjusts the crop region's position to be fully inside the scene bounds."""
+        """
+        Adjusts the item's position so the actual drawn rect stays fully inside
+        the scene's bounding rect.  Uses mapRectToScene(rect()) — the true drawn
+        rect — NOT sceneBoundingRect() which is inflated by handle padding and
+        would cause an erroneous position shift equal to HANDLE_SIZE/2.
+        """
+        if not self.scene():
+            return
         scene_rect = self.scene().sceneRect()
-        crop_rect = self.sceneBoundingRect()
-        dx, dy = 0, 0
+        crop_rect = self.mapRectToScene(self.rect())
+        dx, dy = 0.0, 0.0
         if crop_rect.left() < scene_rect.left():
             dx = scene_rect.left() - crop_rect.left()
         if crop_rect.top() < scene_rect.top():
@@ -239,11 +280,17 @@ class InteractiveCropRegion(QGraphicsRectItem):
             self.moveBy(dx, dy)
 
     def wheelEvent(self, event: QGraphicsSceneWheelEvent):
+        """
+        Scale the crop rect uniformly on mouse-wheel scroll, then clamp to scene bounds.
+        The scale is applied about the rect's current center in local space.
+        Clamping is delegated to clamp_to_scene_bounds() which uses the actual
+        drawn rect (not the handle-padded bounding rect).
+        """
         delta_val = event.delta()
-        scale_factor = 1 + (delta_val / 120) * 0.1
+        scale_factor = 1.0 + (delta_val / 120) * 0.1
         current_rect = self.rect()
         center = current_rect.center()
-        new_width = current_rect.width() * scale_factor
+        new_width  = current_rect.width()  * scale_factor
         new_height = current_rect.height() * scale_factor
         if new_width < self.MIN_SIZE or new_height < self.MIN_SIZE:
             event.ignore()
@@ -251,27 +298,16 @@ class InteractiveCropRegion(QGraphicsRectItem):
         if self.aspect_ratio:
             new_height = new_width / self.aspect_ratio
         new_rect = QRectF(
-            center.x() - new_width / 2,
+            center.x() - new_width  / 2,
             center.y() - new_height / 2,
             new_width,
             new_height
         )
-        scene_rect = self.scene().sceneRect()
-        new_scene_rect = self.mapRectToScene(new_rect)
-        dx, dy = 0, 0
-        if new_scene_rect.left() < scene_rect.left():
-            dx = scene_rect.left() - new_scene_rect.left()
-        if new_scene_rect.top() < scene_rect.top():
-            dy = scene_rect.top() - new_scene_rect.top()
-        if new_scene_rect.right() > scene_rect.right():
-            dx = scene_rect.right() - new_scene_rect.right()
-        if new_scene_rect.bottom() > scene_rect.bottom():
-            dy = scene_rect.bottom() - new_scene_rect.bottom()
-        if dx or dy:
-            new_scene_rect.translate(dx, dy)
-            new_rect = self.mapRectFromScene(new_scene_rect)
+        self.prepareGeometryChange()
         self.setRect(new_rect)
         self.updateHandlePositions()
+        # Clamp position via the corrected helper (uses actual rect, not bounding rect).
+        self.clamp_to_scene_bounds()
         event.accept()
         if self.scene() and hasattr(self.scene().parent_widget, "crop_rect_finalized"):
             self.scene().parent_widget.crop_rect_finalized(self.mapRectToScene(self.rect()))
