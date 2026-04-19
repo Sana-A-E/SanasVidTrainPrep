@@ -526,6 +526,9 @@ class VideoCropper(QWidget):
         for item in items_to_remove:
             self.scene.removeItem(item)
         self.current_rect = None
+        # Keep the scene's crop_item reference in sync so mouse events
+        # are not routed to an item that no longer exists.
+        self.scene.crop_item = None
 
     def crop_rect_updating(self, rect):
         """
@@ -576,9 +579,19 @@ class VideoCropper(QWidget):
                  self.clear_crop_region_controller() # Clear invalid visual crop
                  return
                  
-        # Snap dimensions to be divisible by 2
-        w = w - (w % 2)
-        h = h - (h % 2)
+        # Snap dimensions to be divisible by 2.
+        # If rounding w/h down would push the crop outside the video, adjust x/y
+        # by +1 instead so the crop stays fully within bounds.
+        if w % 2 != 0:
+            if x + (w - 1) <= self.original_width:
+                w -= 1  # round down
+            else:
+                x += 1  # shift origin instead
+        if h % 2 != 0:
+            if y + (h - 1) <= self.original_height:
+                h -= 1  # round down
+            else:
+                y += 1  # shift origin instead
         if w < 2: w = 2
         if h < 2: h = 2
 
@@ -1211,10 +1224,13 @@ class VideoCropper(QWidget):
                 # Create a QRectF object first
                 scene_rect = QRectF(scene_x, scene_y, scene_w, scene_h)
 
-                # Create and add the visual crop rectangle using the QRectF and pass aspect ratio
-                crop_item = InteractiveCropRegion(scene_rect, aspect_ratio=self.scene.aspect_ratio) # Pass aspect ratio here
+                # Create and add the visual crop rectangle.
+                crop_item = InteractiveCropRegion(scene_rect, aspect_ratio=self.scene.aspect_ratio)
                 self.scene.addItem(crop_item)
-                self.current_rect = crop_item # Keep track of the visual item
+                self.current_rect = crop_item  # Keep track of the visual item
+                # IMPORTANT: register with the scene so that mouse presses are routed
+                # to the existing item rather than starting a new draw.
+                self.scene.crop_item = crop_item
                 
                 # Update UI elements
                 self.crop_x_input.setText(str(x))

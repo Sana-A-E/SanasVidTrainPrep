@@ -30,10 +30,8 @@ class InteractiveCropRegion(QGraphicsRectItem):
         # Internal state for resizing
         self.active_handle = None  # "top_left", "top_right", "bottom_left", or "bottom_right"
         self.resizing = False
-        self.start_rect = QRectF()
-        self.start_mouse_pos = QPointF()
-        # Store the offset between the scenePos and the item's position during dragging.
-        self._drag_offset = QPointF()
+        self.start_rect_scene = QRectF()   # start rect in scene coordinates
+        self.start_mouse_scene = QPointF() # start mouse position in scene coordinates
         
         self.handle_positions = {}
         
@@ -103,99 +101,126 @@ class InteractiveCropRegion(QGraphicsRectItem):
         if handle:
             self.active_handle = handle
             self.resizing = True
-            self.start_rect = QRectF(self.rect())
-            self.start_mouse_pos = pos_local
+            # Capture start state in scene coordinates to avoid local-coord drift
+            # when the item's origin shifts due to ItemIsMovable.
+            self.start_rect_scene = self.mapRectToScene(self.rect())
+            self.start_mouse_scene = event.scenePos()
         else:
             self.resizing = False
             super().mousePressEvent(event)
         event.accept()
 
     def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent):
-        # Normal handling for non-WAN mode
+        """
+        Handle mouse drag for resizing (when a handle is active) or moving the whole rect.
+        All resize arithmetic is done in scene coordinates to prevent local-coord drift
+        that can occur when the item's origin shifts due to ItemIsMovable.
+        """
         if self.resizing and self.active_handle:
-            current_pos = event.pos()
-            delta = current_pos - self.start_mouse_pos
-            new_rect = QRectF(self.start_rect)
+            scene_delta = event.scenePos() - self.start_mouse_scene
+            s = self.start_rect_scene          # start rect in scene space
+            scene_bounds = self.scene().sceneRect()
+
+            # Determine which edge moves (the dragged corner) and which stays fixed.
             if self.active_handle == "top_left":
-                fixed = self.start_rect.bottomRight()
-                new_top_left = self.start_rect.topLeft() + delta
+                fixed_pt = s.bottomRight()
+                moved_x = s.left()  + scene_delta.x()
+                moved_y = s.top()   + scene_delta.y()
                 if self.aspect_ratio:
-                    candidate_width = fixed.x() - new_top_left.x()
-                    candidate_height = fixed.y() - new_top_left.y()
-                    if candidate_width / candidate_height > self.aspect_ratio:
-                        candidate_width = candidate_height * self.aspect_ratio
+                    w = fixed_pt.x() - moved_x
+                    h = fixed_pt.y() - moved_y
+                    if w / max(h, 1e-6) > self.aspect_ratio:
+                        w = h * self.aspect_ratio
                     else:
-                        candidate_height = candidate_width / self.aspect_ratio
-                    new_top_left = QPointF(fixed.x() - candidate_width, fixed.y() - candidate_height)
-                new_rect.setTopLeft(new_top_left)
+                        h = w / self.aspect_ratio
+                    moved_x = fixed_pt.x() - w
+                    moved_y = fixed_pt.y() - h
+                # Clamp moving edge to scene bounds
+                moved_x = max(scene_bounds.left(), moved_x)
+                moved_y = max(scene_bounds.top(),  moved_y)
+                new_scene_rect = QRectF(QPointF(moved_x, moved_y), fixed_pt).normalized()
+
             elif self.active_handle == "top_right":
-                fixed = self.start_rect.bottomLeft()
-                new_top_right = self.start_rect.topRight() + delta
+                fixed_pt = s.bottomLeft()
+                moved_x = s.right() + scene_delta.x()
+                moved_y = s.top()   + scene_delta.y()
                 if self.aspect_ratio:
-                    candidate_width = new_top_right.x() - fixed.x()
-                    candidate_height = fixed.y() - new_top_right.y()
-                    if candidate_width / candidate_height > self.aspect_ratio:
-                        candidate_width = candidate_height * self.aspect_ratio
+                    w = moved_x - fixed_pt.x()
+                    h = fixed_pt.y() - moved_y
+                    if w / max(h, 1e-6) > self.aspect_ratio:
+                        w = h * self.aspect_ratio
                     else:
-                        candidate_height = candidate_width / self.aspect_ratio
-                    new_top_right = QPointF(fixed.x() + candidate_width, fixed.y() - candidate_height)
-                new_rect.setTopRight(new_top_right)
+                        h = w / self.aspect_ratio
+                    moved_x = fixed_pt.x() + w
+                    moved_y = fixed_pt.y() - h
+                moved_x = min(scene_bounds.right(), moved_x)
+                moved_y = max(scene_bounds.top(),   moved_y)
+                new_scene_rect = QRectF(fixed_pt, QPointF(moved_x, moved_y)).normalized()
+
             elif self.active_handle == "bottom_left":
-                fixed = self.start_rect.topRight()
-                new_bottom_left = self.start_rect.bottomLeft() + delta
+                fixed_pt = s.topRight()
+                moved_x = s.left()   + scene_delta.x()
+                moved_y = s.bottom() + scene_delta.y()
                 if self.aspect_ratio:
-                    candidate_width = fixed.x() - new_bottom_left.x()
-                    candidate_height = new_bottom_left.y() - fixed.y()
-                    if candidate_width / candidate_height > self.aspect_ratio:
-                        candidate_width = candidate_height * self.aspect_ratio
+                    w = fixed_pt.x() - moved_x
+                    h = moved_y - fixed_pt.y()
+                    if w / max(h, 1e-6) > self.aspect_ratio:
+                        w = h * self.aspect_ratio
                     else:
-                        candidate_height = candidate_width / self.aspect_ratio
-                    new_bottom_left = QPointF(fixed.x() - candidate_width, fixed.y() + candidate_height)
-                new_rect.setBottomLeft(new_bottom_left)
-            elif self.active_handle == "bottom_right":
-                fixed = self.start_rect.topLeft()
-                new_bottom_right = self.start_rect.bottomRight() + delta
+                        h = w / self.aspect_ratio
+                    moved_x = fixed_pt.x() - w
+                    moved_y = fixed_pt.y() + h
+                moved_x = max(scene_bounds.left(),   moved_x)
+                moved_y = min(scene_bounds.bottom(), moved_y)
+                new_scene_rect = QRectF(QPointF(moved_x, moved_y), fixed_pt).normalized()
+
+            else:  # bottom_right
+                fixed_pt = s.topLeft()
+                moved_x = s.right()  + scene_delta.x()
+                moved_y = s.bottom() + scene_delta.y()
                 if self.aspect_ratio:
-                    candidate_width = new_bottom_right.x() - fixed.x()
-                    candidate_height = new_bottom_right.y() - fixed.y()
-                    if candidate_width / candidate_height > self.aspect_ratio:
-                        candidate_width = candidate_height * self.aspect_ratio
+                    w = moved_x - fixed_pt.x()
+                    h = moved_y - fixed_pt.y()
+                    if w / max(h, 1e-6) > self.aspect_ratio:
+                        w = h * self.aspect_ratio
                     else:
-                        candidate_height = candidate_width / self.aspect_ratio
-                    new_bottom_right = QPointF(fixed.x() + candidate_width, fixed.y() + candidate_height)
-                new_rect.setBottomRight(new_bottom_right)
-            if new_rect.width() < self.MIN_SIZE or new_rect.height() < self.MIN_SIZE:
-                new_rect = self.rect()
-            scene_rect = self.scene().sceneRect()
-            new_scene_rect = self.mapRectToScene(new_rect)
-            dx, dy = 0, 0
-            if new_scene_rect.left() < scene_rect.left():
-                dx = scene_rect.left() - new_scene_rect.left()
-            if new_scene_rect.top() < scene_rect.top():
-                dy = scene_rect.top() - new_scene_rect.top()
-            if new_scene_rect.right() > scene_rect.right():
-                dx = scene_rect.right() - new_scene_rect.right()
-            if new_scene_rect.bottom() > scene_rect.bottom():
-                dy = scene_rect.bottom() - new_scene_rect.bottom()
-            if dx or dy:
-                new_scene_rect.translate(dx, dy)
-                new_rect = self.mapRectFromScene(new_scene_rect)
-            self.setRect(new_rect.normalized())
+                        h = w / self.aspect_ratio
+                    moved_x = fixed_pt.x() + w
+                    moved_y = fixed_pt.y() + h
+                moved_x = min(scene_bounds.right(),  moved_x)
+                moved_y = min(scene_bounds.bottom(), moved_y)
+                new_scene_rect = QRectF(fixed_pt, QPointF(moved_x, moved_y)).normalized()
+
+            # Enforce minimum size
+            if new_scene_rect.width() < self.MIN_SIZE or new_scene_rect.height() < self.MIN_SIZE:
+                new_scene_rect = self.start_rect_scene
+
+            # Convert back to local item coordinates and apply
+            new_local_rect = self.mapRectFromScene(new_scene_rect)
+            self.prepareGeometryChange()
+            self.setRect(new_local_rect)
             self.updateHandlePositions()
             event.accept()
-            if hasattr(self.scene().parent_widget, "crop_rect_updating"):
-                self.scene().parent_widget.crop_rect_updating(self.sceneBoundingRect())
+            if self.scene() and hasattr(self.scene().parent_widget, "crop_rect_updating"):
+                self.scene().parent_widget.crop_rect_updating(self.mapRectToScene(self.rect()))
         else:
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent):
+        """
+        Finalise a resize or move operation, clamp position to scene bounds,
+        and notify the parent widget with the true drawn rect (not the inflated
+        bounding rect which includes handle padding).
+        """
         if not self.resizing:
             super().mouseReleaseEvent(event)
         self.resizing = False
         self.clamp_to_scene_bounds()
         event.accept()
-        if hasattr(self.scene().parent_widget, "crop_rect_finalized"):
-            self.scene().parent_widget.crop_rect_finalized(self.sceneBoundingRect())
+        if self.scene() and hasattr(self.scene().parent_widget, "crop_rect_finalized"):
+            # Use mapRectToScene(rect()) — the actual drawn rect — NOT sceneBoundingRect()
+            # which is expanded by HANDLE_SIZE/2 + pen width on every side.
+            self.scene().parent_widget.crop_rect_finalized(self.mapRectToScene(self.rect()))
 
     def clamp_to_scene_bounds(self):
         """Adjusts the crop region's position to be fully inside the scene bounds."""
@@ -248,27 +273,8 @@ class InteractiveCropRegion(QGraphicsRectItem):
         self.setRect(new_rect)
         self.updateHandlePositions()
         event.accept()
-        if hasattr(self.scene().parent_widget, "crop_rect_finalized"):
-            self.scene().parent_widget.crop_rect_finalized(self.sceneBoundingRect())
-        """
-        Adjusts the crop region's position if it moves outside the scene bounds.
-        This is called on mouse release after dragging the entire crop region.
-        """
-        scene_rect = self.scene().sceneRect()
-        crop_rect = self.sceneBoundingRect()
-
-        dx, dy = 0, 0
-        if crop_rect.left() < scene_rect.left():
-            dx = scene_rect.left() - crop_rect.left()
-        if crop_rect.top() < scene_rect.top():
-            dy = scene_rect.top() - crop_rect.top()
-        if crop_rect.right() > scene_rect.right():
-            dx = scene_rect.right() - crop_rect.right()
-        if crop_rect.bottom() > scene_rect.bottom():
-            dy = scene_rect.bottom() - crop_rect.bottom()
-
-        if dx != 0 or dy != 0:
-            self.moveBy(dx, dy)
+        if self.scene() and hasattr(self.scene().parent_widget, "crop_rect_finalized"):
+            self.scene().parent_widget.crop_rect_finalized(self.mapRectToScene(self.rect()))
 
     def update_geometry_on_ratio_change(self):
         if self.aspect_ratio is not None and self.rect().width() > 0:
@@ -303,6 +309,7 @@ class InteractiveCropRegion(QGraphicsRectItem):
             self.clamp_to_scene_bounds() # Ensure it stays within scene after resize
             
             if self.scene() and hasattr(self.scene().parent_widget, "crop_rect_finalized"):
-                 # Notify parent that the crop has changed due to aspect ratio update
-                 self.scene().parent_widget.crop_rect_finalized(self.sceneBoundingRect())
+                # Notify parent that the crop has changed due to aspect ratio update.
+                # Use mapRectToScene(rect()) — the actual drawn rect.
+                self.scene().parent_widget.crop_rect_finalized(self.mapRectToScene(self.rect()))
             self.update() # Request a repaint
