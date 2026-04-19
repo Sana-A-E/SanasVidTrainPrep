@@ -290,11 +290,15 @@ class VideoCropper(QWidget):
         current_aspect_ratio_layout.addWidget(QLabel("Aspect Ratio:"))
         # self.aspect_ratio_combo is already initialized and items added.
         current_aspect_ratio_layout.addWidget(self.aspect_ratio_combo)
-        resolution_aspect_layout.addRow(current_aspect_ratio_layout)
+        
         
         # Fixed Resolution Mode UI Elements
-        fixed_res_label = QLabel("Fixed Resolution Mode:")
-        resolution_aspect_layout.addRow(fixed_res_label)
+        custom_ar_layout = QHBoxLayout()
+        fixed_res_label = QLabel("<b>Custom Aspect Ratio:</b>")
+        self.fixed_res_status_label = QLabel("Custom Aspect Ratio: Deactivated")
+        custom_ar_layout.addWidget(fixed_res_label)
+        custom_ar_layout.addWidget(self.fixed_res_status_label)
+        resolution_aspect_layout.addRow(custom_ar_layout)
 
         fixed_res_inputs_layout = QHBoxLayout()
         self.fixed_width_input = QLineEdit()
@@ -307,14 +311,13 @@ class VideoCropper(QWidget):
         self.fixed_height_input.setValidator(QIntValidator(1, 7680, self))
         fixed_res_inputs_layout.addWidget(self.fixed_height_input)
 
-        self.apply_fixed_res_button = QPushButton("Apply Fixed Res")
+        self.apply_fixed_res_button = QPushButton("✔️ Apply")
         fixed_res_inputs_layout.addWidget(self.apply_fixed_res_button)
-        self.clear_fixed_res_button = QPushButton("Clear Fixed Res")
+        self.clear_fixed_res_button = QPushButton("🗑️ Clear")
         fixed_res_inputs_layout.addWidget(self.clear_fixed_res_button)
         resolution_aspect_layout.addRow(fixed_res_inputs_layout)
         
-        self.fixed_res_status_label = QLabel("Fixed resolution: Deactivated")
-        resolution_aspect_layout.addRow(self.fixed_res_status_label)
+        
 
         self.apply_fixed_res_button.clicked.connect(lambda: self.toggle_fixed_resolution_mode(True))
         self.clear_fixed_res_button.clicked.connect(lambda: self.toggle_fixed_resolution_mode(False))
@@ -322,7 +325,7 @@ class VideoCropper(QWidget):
         # --- Current Crop Details ---
         current_crop_group = QWidget()
         current_crop_layout = QFormLayout(current_crop_group)
-        current_crop_layout.setContentsMargins(0, 5, 0, 5)
+        current_crop_layout.setContentsMargins(0, 5, 0, 0)
 
         crop_xy_layout = QHBoxLayout()
         self.crop_x_input = QLineEdit()
