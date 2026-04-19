@@ -97,11 +97,12 @@ class VideoCropper(QWidget):
         left_panel.addWidget(icon_label)
         
         top_buttons_layout = QHBoxLayout()
-        self.folder_button = QPushButton("Select Folder")
+        self.folder_button = QPushButton("📂 Select Folder")
+        self.folder_button.setToolTip("Select folder containing videos.")
         self.folder_button.clicked.connect(self.loader.load_folder)
         top_buttons_layout.addWidget(self.folder_button)
         
-        self.convert_fps_button = QPushButton("Convert FPS...")
+        self.convert_fps_button = QPushButton("🗜 Convert FPS")
         self.convert_fps_button.setToolTip("Convert all videos in the current folder to a target FPS.")
         self.convert_fps_button.clicked.connect(self.open_convert_fps_dialog)
         top_buttons_layout.addWidget(self.convert_fps_button)
@@ -151,15 +152,15 @@ class VideoCropper(QWidget):
 
         # Add/Remove Buttons
         range_button_layout = QHBoxLayout()
-        self.add_range_button = QPushButton("Add Range Here") # Renamed button
+        self.add_range_button = QPushButton("➕ Add Range") # Renamed button
         self.add_range_button.setToolTip("Add a new range starting at the current frame, using the specified duration (no crop).")
         self.add_range_button.clicked.connect(self.add_range_at_current_frame) # Changed connection
         range_button_layout.addWidget(self.add_range_button)
 
-        self.remove_range_button = QPushButton("Remove Range")
+        self.remove_range_button = QPushButton("🗑️ Remove")
         self.remove_range_button.clicked.connect(self.remove_selected_range) # New method needed
         range_button_layout.addWidget(self.remove_range_button)
-        self.play_range_button = QPushButton("Preview Range (Z/Y)") # New Button
+        self.play_range_button = QPushButton("▶️ Preview Range (Z/Y)") # New Button
         self.play_range_button.clicked.connect(self.toggle_play_selected_range) # New method
         QShortcut(QKeySequence("Z"), self).activated.connect(self.toggle_play_selected_range)
         QShortcut(QKeySequence("Y"), self).activated.connect(self.toggle_play_selected_range)
@@ -173,11 +174,18 @@ class VideoCropper(QWidget):
         self.clear_crop_button.clicked.connect(self.clear_current_range_crop) # New method needed
         left_panel.addWidget(self.clear_crop_button)
 
-        self.export_cropped_checkbox = QCheckBox("Export Cropped Clips") # Keep concept
-        self.export_cropped_checkbox.setChecked(True) # Default to true maybe?
+        self.export_all_checkbox = QCheckBox("Export All Ranges as Defined") 
+        self.export_all_checkbox.setToolTip("Exports all ranges just once. If they have a crop rect defined, then they are exported cropped. If they don't have a crop rect defined, they are exported uncropped.")
+        self.export_all_checkbox.setChecked(True)
+        left_panel.addWidget(self.export_all_checkbox)
+
+        self.export_cropped_checkbox = QCheckBox("Export Cropped Ranges Only") # Keep concept
+        self.export_cropped_checkbox.setToolTip("Exports all ranges with a crop region. Does not export ranges without crop data.")
+        self.export_cropped_checkbox.setChecked(False)
         left_panel.addWidget(self.export_cropped_checkbox)
 
-        self.export_uncropped_checkbox = QCheckBox("Export Uncropped Clips") # Keep concept
+        self.export_uncropped_checkbox = QCheckBox("Export All Ranges Uncropped") # Keep concept
+        self.export_uncropped_checkbox.setToolTip("Exports all defined ranges uncropped, regardless of whether they have a crop defined or not.")
         self.export_uncropped_checkbox.setChecked(False)
         left_panel.addWidget(self.export_uncropped_checkbox)
 
@@ -236,7 +244,7 @@ class VideoCropper(QWidget):
         
         # RIGHT PANEL
         right_panel = QVBoxLayout()
-        keybindings_label = QLabel("Left/Right: Prev/Next Frame | Shift+Left/Right: Prev/Next Second | Drag: Crop | Z/Y: Preview Range | X: Next Video | C: Play/Pause | Q/W: Nudge End | A/S: Nudge Start") # Updated shortcuts
+        keybindings_label = QLabel("⬅️/➡️: Prev./Next Frame • <b>Shift+</b>⬅️/➡️: Prev/Next Second • <b>Z/Y</b>: Preview Range • <b>X</b>: Next Video • <b>C</b>: ▶️/⏸️ • <b>A/S</b>: Nudge Start Frame • <b>Q/W</b>: Nudge End Frame • Drag on Canvas: Create Crop ") # Updated shortcuts
         keybindings_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         keybindings_label.setStyleSheet("font-size: 11px; color: #ECEFF4;") # Smaller font
         right_panel.addWidget(keybindings_label)
@@ -288,14 +296,12 @@ class VideoCropper(QWidget):
         self.fixed_height_input.setPlaceholderText("Height")
         self.fixed_height_input.setValidator(QIntValidator(1, 7680, self))
         fixed_res_inputs_layout.addWidget(self.fixed_height_input)
-        resolution_aspect_layout.addRow(fixed_res_inputs_layout)
 
-        fixed_res_buttons_layout = QHBoxLayout()
         self.apply_fixed_res_button = QPushButton("Apply Fixed Res")
-        fixed_res_buttons_layout.addWidget(self.apply_fixed_res_button)
+        fixed_res_inputs_layout.addWidget(self.apply_fixed_res_button)
         self.clear_fixed_res_button = QPushButton("Clear Fixed Res")
-        fixed_res_buttons_layout.addWidget(self.clear_fixed_res_button)
-        resolution_aspect_layout.addRow(fixed_res_buttons_layout)
+        fixed_res_inputs_layout.addWidget(self.clear_fixed_res_button)
+        resolution_aspect_layout.addRow(fixed_res_inputs_layout)
         
         self.fixed_res_status_label = QLabel("Fixed resolution: Deactivated")
         resolution_aspect_layout.addRow(self.fixed_res_status_label)
@@ -321,9 +327,8 @@ class VideoCropper(QWidget):
         crop_xy_layout.addWidget(self.crop_x_input)
         crop_xy_layout.addWidget(QLabel("Y:"))
         crop_xy_layout.addWidget(self.crop_y_input)
-        current_crop_layout.addRow(crop_xy_layout)
 
-        crop_wh_layout = QHBoxLayout()
+
         self.crop_w_input = QLineEdit()
         self.crop_w_input.setPlaceholderText("Width")
         self.crop_w_input.setToolTip("Width of the crop area in original pixels")
@@ -332,14 +337,14 @@ class VideoCropper(QWidget):
         self.crop_h_input.setPlaceholderText("Height")
         self.crop_h_input.setToolTip("Height of the crop area in original pixels")
         self.crop_h_input.setValidator(QIntValidator(2, 7680, self))
-        crop_wh_layout.addWidget(QLabel("W:"))
-        crop_wh_layout.addWidget(self.crop_w_input)
-        crop_wh_layout.addWidget(QLabel("H:"))
-        crop_wh_layout.addWidget(self.crop_h_input)
-        current_crop_layout.addRow(crop_wh_layout)
+        crop_xy_layout.addWidget(QLabel("W:"))
+        crop_xy_layout.addWidget(self.crop_w_input)
+        crop_xy_layout.addWidget(QLabel("H:"))
+        crop_xy_layout.addWidget(self.crop_h_input)
+        current_crop_layout.addRow(crop_xy_layout)
 
-        self.apply_manual_crop_button = QPushButton("Update Crop from Text")
-        self.apply_manual_crop_button.setToolTip("Apply the above coordinates and size to the current crop.")
+        self.apply_manual_crop_button = QPushButton("🔄️ Update Crop")
+        self.apply_manual_crop_button.setToolTip("Apply the above coordinates and size to the current crop. Pressing enter in the textboxes should also apply the crop, but this button has been added just in case things don't work out as expected.")
         self.apply_manual_crop_button.clicked.connect(self.apply_manual_crop)
         current_crop_layout.addRow(self.apply_manual_crop_button)
         
@@ -377,12 +382,12 @@ class VideoCropper(QWidget):
         self.step_backward_button.setFixedWidth(80)
         frame_control_layout.addWidget(self.step_backward_button)
 
-        self.jump_start_frame_button = QPushButton("Start Frame")
+        self.jump_start_frame_button = QPushButton("⏮️")
         self.jump_start_frame_button.setToolTip("Navigate frame slider to the current range's start frame")
         self.jump_start_frame_button.clicked.connect(self.jump_to_range_start)
         frame_control_layout.addWidget(self.jump_start_frame_button)
 
-        self.update_start_f_button = QPushButton("Update Start F.")
+        self.update_start_f_button = QPushButton("📝 Start F.")
         self.update_start_f_button.setToolTip("Changes Start Frame of currently selected Range to current frame")
         self.update_start_f_button.clicked.connect(self.set_range_start_to_current)
         frame_control_layout.addWidget(self.update_start_f_button)
@@ -392,12 +397,12 @@ class VideoCropper(QWidget):
         self.current_frame_label.setStyleSheet("font-size: 12px; color: #C0C0C0;")
         frame_control_layout.addWidget(self.current_frame_label, 1)
 
-        self.update_end_f_button = QPushButton("Update End F.")
+        self.update_end_f_button = QPushButton("📝 End F.")
         self.update_end_f_button.setToolTip("Changes the End Frame of currently selected Range to current frame")
         self.update_end_f_button.clicked.connect(self.set_range_end_to_current)
         frame_control_layout.addWidget(self.update_end_f_button)
 
-        self.jump_end_frame_button = QPushButton("End Frame")
+        self.jump_end_frame_button = QPushButton("⏭️")
         self.jump_end_frame_button.setToolTip("Navigate frame slider to the current range's end frame")
         self.jump_end_frame_button.clicked.connect(self.jump_to_range_end)
         frame_control_layout.addWidget(self.jump_end_frame_button)
@@ -481,15 +486,15 @@ class VideoCropper(QWidget):
         right_panel.addWidget(self.tabs)
 
         export_buttons_layout = QHBoxLayout()
-        self.submit_button = QPushButton("Export Selected Video(s)")
+        self.submit_button = QPushButton("🎞️ Export Selected Video(s)")
         self.submit_button.clicked.connect(self.exporter.export_videos)
         export_buttons_layout.addWidget(self.submit_button)
         
-        self.export_range_start_frames_button = QPushButton("Export 1st Frame of Ranges")
+        self.export_range_start_frames_button = QPushButton("📚 Export 1st Frame of Ranges")
         self.export_range_start_frames_button.clicked.connect(self.trigger_export_range_start_frames)
         export_buttons_layout.addWidget(self.export_range_start_frames_button)
 
-        self.export_current_frame_button = QPushButton("Export Current Frame")
+        self.export_current_frame_button = QPushButton("🖼️ Export Current Frame")
         self.export_current_frame_button.clicked.connect(self.exporter.export_current_frame_as_image)
         export_buttons_layout.addWidget(self.export_current_frame_button)
         

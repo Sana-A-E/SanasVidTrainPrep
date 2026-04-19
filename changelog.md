@@ -29,3 +29,12 @@
 ### Bug Fixes
 - Crop region usage no longer causes "random" crashes.
 - Crop region can now be properly resized and moved after creation.
+
+## [2026-04-19]
+### Added Features
+- Added "Export All Ranges as Defined" checkbox to the export options in the left pane. This should be more useful than the other two export options, as it exports all defined ranges once - cropped if they have a crop rect defined, and uncropped if they don't. This is the new default export method.
+
+### UX Improvements
+- Renamed existing Export checkboxes to better reflect their function. Also added tooltips to clarify their function.
+- Added icons to the main buttons for better UX
+- Rewrote shortcut instructions to be more visually pleasing and easier to read

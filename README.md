@@ -9,7 +9,8 @@ I will not be working further on the captioning aspect of the app, nor upgrading
 
 ## Most notable changes:
 - Fixed drawing of crop regions to actually work without causing app crashes. Crop region can now be properly resized and moved after creation as you would expect.
-- The UI layout was reorganized to reduce space wastage
+- Added "Export All Ranges as Defined" checkbox to the export options in the left pane. This should be more useful than the other two export options, as it exports all defined ranges once - cropped if they have a crop rect defined, and uncropped if they don't. This is the new default export method
+- The UI layout was reorganized to reduce space wastage, and tooltips were added to clarify function/usage of elements.
 - Made the "Start Frame" text box editable, updating the current clip range when editing is finished. You can now manually edit start of your range and even create overlapping ranges.
 - Added "End Frame" text box next to "Start Frame" text box for range selection to enable you to set your clip range based on a specific end frame instead of just duration.
 - Range logic synchronization: start frame, end frame, and duration are now linked and recalculate based on the most recently modified property. When recalculation is triggered, the most recently modified properties are preserved while the oldest one is synced to the other two.
