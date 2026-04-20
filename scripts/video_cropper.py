@@ -57,6 +57,7 @@ class VideoCropper(QWidget):
         # Session file (will need update later)
         self.folder_sessions = {}
         self.session_file = "session_data.json"
+        self.longest_edge = 1024  # Default; may be overwritten by loaded session data
 
         # Caption properties (unchanged)
         self.simple_caption = ""
@@ -170,9 +171,7 @@ class VideoCropper(QWidget):
         left_panel.addWidget(range_group_box) # Add the range management group
 
         # --- Other Controls (Moved slightly) ---
-        self.clear_crop_button = QPushButton("Clear Crop for Selected Range") # Text updated
-        self.clear_crop_button.clicked.connect(self.clear_current_range_crop) # New method needed
-        left_panel.addWidget(self.clear_crop_button)
+
 
         self.export_all_checkbox = QCheckBox("Export All Ranges as Defined")
         self.export_all_checkbox.setToolTip(
@@ -359,7 +358,15 @@ class VideoCropper(QWidget):
         self.apply_manual_crop_button = QPushButton("🔄️ Update Crop")
         self.apply_manual_crop_button.setToolTip("Apply the above coordinates and size to the current crop. Pressing enter in the textboxes should also apply the crop, but this button has been added just in case things don't work out as expected.")
         self.apply_manual_crop_button.clicked.connect(self.apply_manual_crop)
-        current_crop_layout.addRow(self.apply_manual_crop_button)
+
+        self.clear_crop_button = QPushButton("🗑️ Clear Crop")
+        self.clear_crop_button.setToolTip("Clear the crop region for the currently selected range.")
+        self.clear_crop_button.clicked.connect(self.clear_current_range_crop)
+
+        crop_action_row = QHBoxLayout()
+        crop_action_row.addWidget(self.apply_manual_crop_button)
+        crop_action_row.addWidget(self.clear_crop_button)
+        current_crop_layout.addRow(crop_action_row)
         
         # Connect enter key on inputs
         self.crop_x_input.returnPressed.connect(self.apply_manual_crop)
@@ -705,10 +712,12 @@ class VideoCropper(QWidget):
         reply = QMessageBox.question(self, "Delete Video", f"Are you sure you want to move this file to the recycle bin?\n\n{self.current_video_original_path}", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                # Release video file first to avoid 'file in use' errors
-                if hasattr(self.editor, 'cap') and self.editor.cap:
-                    self.editor.cap.release()
-                    self.editor.cap = None
+                # Stop active playback and release the video handle to prevent
+                # WinError 32 (file in use by another process) on deletion.
+                self.editor.stop_playback()
+                if self.cap:
+                    self.cap.release()
+                    self.cap = None
 
                 send2trash.send2trash(self.current_video_original_path)
 
@@ -1370,8 +1379,8 @@ class VideoCropper(QWidget):
                 width_str = self.fixed_width_input.text()
                 height_str = self.fixed_height_input.text()
                 if not width_str or not height_str:
-                    QMessageBox.warning(self, "Input Error", "Please enter both width and height for fixed resolution.")
-                    self.fixed_res_status_label.setText("Fixed resolution: Invalid input")
+                    QMessageBox.warning(self, "Input Error", "Please enter both width and height for fixed resolution/custom AR.")
+                    self.fixed_res_status_label.setText("Custom AR: Invalid input")
                     return
 
                 width = int(width_str)
@@ -1379,7 +1388,7 @@ class VideoCropper(QWidget):
 
                 if width <= 0 or height <= 0:
                     QMessageBox.warning(self, "Input Error", "Width and Height must be positive values.")
-                    self.fixed_res_status_label.setText("Fixed resolution: Invalid W/H")
+                    self.fixed_res_status_label.setText("Custom AR: Invalid W/H")
                     return
                 
                 self.fixed_export_width = width
@@ -1401,12 +1410,12 @@ class VideoCropper(QWidget):
                     self.aspect_ratio_combo.setCurrentText(free_form_text)
                     self.aspect_ratio_combo.blockSignals(False)
                 
-                self.fixed_res_status_label.setText(f"Fixed resolution: {width}x{height} (Active)")
-                print(f"Fixed resolution mode enabled: {width}x{height}")
+                self.fixed_res_status_label.setText(f"Custom AR:{width}x{height} (Active)")
+                print(f"Custom AR mode enabled: {width}x{height}")
 
             except ValueError:
                 QMessageBox.warning(self, "Input Error", "Invalid number format for width or height.")
-                self.fixed_res_status_label.setText("Fixed resolution: Format Error")
+                self.fixed_res_status_label.setText("Custom AR: Format Error")
                 # Don't automatically call toggle_fixed_resolution_mode(False) here to avoid recursion on bad input
                 # User needs to correct or clear.
         else: # Disable fixed resolution mode
@@ -1422,10 +1431,10 @@ class VideoCropper(QWidget):
 
             # Restore aspect ratio from the (now enabled) combobox
             current_combo_selection = self.aspect_ratio_combo.currentText()
-            self.on_aspect_ratio_changed(current_combo_selection) 
+            self.set_aspect_ratio(current_combo_selection)
             
-            self.fixed_res_status_label.setText("Fixed resolution: Deactivated")
-            print("Fixed resolution mode disabled.")
+            self.fixed_res_status_label.setText("Custom AR: Deactivated")
+            print("Custom AR mode disabled.")
 
     def trigger_export_range_start_frames(self):
         """

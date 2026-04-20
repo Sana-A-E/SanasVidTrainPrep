@@ -1,4 +1,4 @@
-import os, ffmpeg, cv2
+﻿import os, ffmpeg, cv2
 from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtCore import Qt
 import google.generativeai as genai

@@ -32,9 +32,16 @@
 
 ## [2026-04-19]
 ### Added Features
-- Added "Export All Ranges as Defined" checkbox to the export options in the left pane. This should be more useful than the other two export options, as it exports all defined ranges once - cropped if they have a crop rect defined, and uncropped if they don't. This is the new default export method.
+- Added "**Export All Ranges as Defined**" checkbox to the export options in the left pane. This should be more useful than the other two export options, as it exports all defined ranges once - cropped if they have a crop rect defined, and uncropped if they don't. This is the new default export method.
 
 ### UX Improvements
 - Renamed existing Export checkboxes to better reflect their function. Also added tooltips to clarify their function.
 - Added icons to the main buttons for better UX
 - Rewrote shortcut instructions to be more visually pleasing and easier to read
+- Moved **"Clear Crop"** button from the left panel into the **Crop tab**, placed next to the "Update Crop" button for a more logical grouping.
+
+### Bug Fixes
+- **Delete Video** no longer raises `WinError 32` ("file in use by another process"). The fix stops active playback via the timer and correctly releases the `cv2.VideoCapture` handle held by `VideoCropper.cap` (previously the code was checking a non-existent `editor.cap` attribute).
+- **Session data sanitation**: `VideoLoader.load_session()` now calls `_sanitize_session_paths()` after loading, which removes stale entries from `folder_sessions`, `video_files`, and `video_data`, removing any folders or files that no longer exist on disk. The active folder path is also cleared if it has been deleted.
+- **Close with no folder selected** no longer raises `AttributeError: 'VideoCropper' object has no attribute 'longest_edge'`. Fixed in two places: `longest_edge` is now initialized to `1024` in `VideoCropper.__init__`, and `save_session` uses `getattr(..., 1024)` as a safe fallback.
+- **"Clear" (fixed resolution) button** no longer raises `AttributeError: 'VideoCropper' object has no attribute 'on_aspect_ratio_changed'`. The call in `toggle_fixed_resolution_mode(False)` is corrected to `self.set_aspect_ratio(...)`, which is the actual method name.

@@ -240,6 +240,8 @@ class VideoLoader:
                     self.main_app.video_data = normalized_video_data
                     # Load other settings
                     self.main_app.longest_edge = session_data.get("longest_edge", 1024)
+                    # Remove stale paths that no longer exist on disk
+                    self._sanitize_session_paths()
                     print("Session loaded successfully.")
             except json.JSONDecodeError:
                  print(f"Error: Could not decode session file: {self.session_file}")
@@ -281,7 +283,7 @@ class VideoLoader:
             "video_files": self.main_app.video_files,
             "folder_sessions": self.main_app.folder_sessions,
             "video_data": self.main_app.video_data, # Save the new range data
-            "longest_edge": self.main_app.longest_edge,
+            "longest_edge": getattr(self.main_app, 'longest_edge', 1024),
             # Remove obsolete keys from saving
             # "crop_regions": self.main_app.crop_regions, 
             # "trim_points": self.main_app.trim_points,
@@ -293,6 +295,51 @@ class VideoLoader:
             # print("Session saved.") # Optional: uncomment for confirmation
         except Exception as e:
             print(f"Error saving session: {e}")
+
+    def _sanitize_session_paths(self):
+        """
+        Scans all paths stored in session data and removes entries whose files or
+        folders no longer exist on disk. This prevents errors after videos are
+        renamed, moved, or deleted outside the application.
+        Called automatically after a session file is loaded.
+        """
+        # --- Sanitize folder_sessions: remove missing folders and their stale video entries ---
+        stale_folders = [f for f in list(self.main_app.folder_sessions.keys())
+                         if not os.path.isdir(f)]
+        for folder in stale_folders:
+            del self.main_app.folder_sessions[folder]
+            print(f"Session cleanup: removed missing folder '{folder}'")
+
+        for folder in list(self.main_app.folder_sessions.keys()):
+            videos = self.main_app.folder_sessions[folder]
+            stale_videos = [v for v in videos
+                            if not os.path.isfile(v.get("original_path", ""))]
+            for v in stale_videos:
+                videos.remove(v)
+                print(f"Session cleanup: removed missing video "
+                      f"'{v.get('original_path', '?')}' from folder '{folder}'")
+
+        # --- Sanitize video_files (active folder listing) ---
+        stale_entries = [v for v in self.main_app.video_files
+                         if not os.path.isfile(v.get("original_path", ""))]
+        for v in stale_entries:
+            self.main_app.video_files.remove(v)
+            print(f"Session cleanup: removed stale video_files entry "
+                  f"'{v.get('original_path', '?')}'")
+
+        # If the active folder path itself no longer exists, reset folder state
+        if self.main_app.folder_path and not os.path.isdir(self.main_app.folder_path):
+            print(f"Session cleanup: active folder no longer exists: "
+                  f"'{self.main_app.folder_path}'. Resetting.")
+            self.main_app.folder_path = ""
+            self.main_app.video_files = []
+
+        # --- Sanitize video_data: remove keys for missing video files ---
+        stale_paths = [p for p in list(self.main_app.video_data.keys())
+                       if not os.path.isfile(p)]
+        for p in stale_paths:
+            del self.main_app.video_data[p]
+            print(f"Session cleanup: removed stale video_data for missing file '{p}'")
 
     def convert_folder_fps(self, target_fps, output_subdir):
         """Converts all videos in the current folder to target_fps in a subfolder."""
