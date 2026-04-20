@@ -85,6 +85,10 @@ class VideoCropper(QWidget):
         self.initUI()
         # Initialize frame label text after UI is built
         self.update_current_frame_label(0, 0, 0) # Show initial state
+        
+        # Auto-load the last opened folder if it still exists
+        if self.folder_path and os.path.isdir(self.folder_path):
+            self.loader.load_folder(self.folder_path)
     
     def initUI(self):
         main_layout = QHBoxLayout(self)

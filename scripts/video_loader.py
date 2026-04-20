@@ -9,17 +9,17 @@ class VideoLoader:
         self.main_app = main_app
         self.session_file = "session_data.json"
 
-    def load_folder(self):
-        folder = QFileDialog.getExistingDirectory(self.main_app, "Select Folder")
+    def load_folder(self, folder_path=None):
+        if folder_path:
+            folder = folder_path
+        else:
+            folder = QFileDialog.getExistingDirectory(self.main_app, "Select Folder")
+            
         if folder:
             folder = os.path.normpath(folder)
             self.main_app.folder_path = folder
-            # Check if we already have saved session data for this folder.
-            if folder in self.main_app.folder_sessions:
-                self.main_app.video_files = self.main_app.folder_sessions[folder]
-                self.refresh_video_list()
-            else:
-                self.load_folder_contents()
+            # Always load contents to ensure newly added videos are detected
+            self.load_folder_contents()
 
     def load_folder_contents(self):
         files = [f for f in os.listdir(self.main_app.folder_path) 

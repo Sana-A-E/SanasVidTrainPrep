@@ -11,6 +11,8 @@ I will not be working further on the captioning aspect of the app, nor upgrading
 - Fixed drawing of crop regions to actually work without causing app crashes. Crop region can now be properly resized and moved after creation as you would expect.
 - Added "Export All Ranges as Defined" checkbox to the export options in the left pane. This should be more useful than the other two export options, as it exports all defined ranges once - cropped if they have a crop rect defined, and uncropped if they don't. This is the new default export method
 - Session data is now sanitized to remove videos and folders that no longer exist.
+- The app now remembers the last opened folder and automatically reopens it on startup.
+- Opening a previously opened folder now scans for newly added videos and includes them, instead of only loading previous session data.
 - The UI layout was reorganized to reduce space wastage, and tooltips were added to clarify function/usage of elements.
 - Made the "Start Frame" text box editable, updating the current clip range when editing is finished. You can now manually edit start of your range and even create overlapping ranges.
 - Added "End Frame" text box next to "Start Frame" text box for range selection to enable you to set your clip range based on a specific end frame instead of just duration.
