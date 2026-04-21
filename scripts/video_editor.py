@@ -299,7 +299,8 @@ class VideoEditor:
             return
 
         # Use a timer for smoother playback
-        interval = int(1000 / self.current_fps) if self.current_fps > 0 else 33
+        speed = self.main_app.playback_speed_spinner.value()
+        interval = int((1000 / self.current_fps) / speed) if self.current_fps > 0 else int(33 / speed)
         self.playback_timer.start(interval)
         # Don't call _playback_step immediately, the timer will trigger it.
 

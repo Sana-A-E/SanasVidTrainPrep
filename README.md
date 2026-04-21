@@ -8,7 +8,8 @@ If I don't notice the bugs (because they are in the part of the app functionalit
 I will not be working further on the captioning aspect of the app, nor upgrading/fixing the Gemini API as there are other apps that do captioning better (I recommend [Vision Captioner](https://github.com/Brekel/VisionCaptioner).)
 
 ## Most notable changes:
-- Fixed drawing of crop regions to actually work without causing app crashes. Crop region can now be properly resized and moved after creation as you would expect.
+- Fixed drawing of crop rects to actually work without causing app crashes. Crop rects can now be properly resized and moved after creation as you would expect.
+- Added **Playback Speed Controls** allowing adjustment of playback speed for both normal and range preview playback. Added shortcuts to control it (A/S/D), and reassigned existing overlapping shortcuts.
 - Added **"Export All Ranges as Defined"** checkbox to the export options in the left pane. This should be more useful than the other two export options, as it exports all defined ranges once - cropped if they have a crop rect defined, and uncropped if they don't. This is the new default export method
 - Session data is now sanitized to remove videos and folders that no longer exist.
 - The app now remembers the last opened folder and automatically reopens it on startup.

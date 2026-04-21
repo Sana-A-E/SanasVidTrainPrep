@@ -3,7 +3,7 @@ import uuid # Import UUID for unique range IDs
 from scripts.custom_graphics_view import CustomGraphicsView
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QFileDialog, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-    QListWidget, QSlider, QGraphicsPixmapItem, QLineEdit, QSpinBox,
+    QListWidget, QSlider, QGraphicsPixmapItem, QLineEdit, QSpinBox, QDoubleSpinBox,
     QSizePolicy, QCheckBox, QListWidgetItem, QComboBox, QMessageBox, QDialog, QFormLayout, QDialogButtonBox,
     QSpacerItem, QTabWidget, QToolButton # Added QToolButton
 )
@@ -178,10 +178,13 @@ class VideoCropper(QWidget):
         QShortcut(QKeySequence("X"), self).activated.connect(self._shortcut_next_video)
         QShortcut(QKeySequence("C"), self).activated.connect(self._shortcut_play_pause)
         QShortcut(QKeySequence(Qt.Key.Key_Space), self).activated.connect(self._shortcut_play_pause)
-        QShortcut(QKeySequence("A"), self).activated.connect(lambda: self.nudge_start_frame(-1) if self.current_selected_range_id else None)
-        QShortcut(QKeySequence("S"), self).activated.connect(lambda: self.nudge_start_frame(1) if self.current_selected_range_id else None)
-        QShortcut(QKeySequence("Q"), self).activated.connect(lambda: self.nudge_end_frame(-1) if self.current_selected_range_id else None)
-        QShortcut(QKeySequence("W"), self).activated.connect(lambda: self.nudge_end_frame(1) if self.current_selected_range_id else None)
+        QShortcut(QKeySequence("Q"), self).activated.connect(lambda: self.nudge_start_frame(-1) if self.current_selected_range_id else None)
+        QShortcut(QKeySequence("W"), self).activated.connect(lambda: self.nudge_start_frame(1) if self.current_selected_range_id else None)
+        QShortcut(QKeySequence("E"), self).activated.connect(lambda: self.nudge_end_frame(-1) if self.current_selected_range_id else None)
+        QShortcut(QKeySequence("R"), self).activated.connect(lambda: self.nudge_end_frame(1) if self.current_selected_range_id else None)
+        QShortcut(QKeySequence("A"), self).activated.connect(self.decrease_playback_speed)
+        QShortcut(QKeySequence("S"), self).activated.connect(lambda: self.playback_speed_spinner.setValue(1.0))
+        QShortcut(QKeySequence("D"), self).activated.connect(self.increase_playback_speed)
         
         range_button_layout.addWidget(self.play_range_button)
         range_layout.addLayout(range_button_layout)
@@ -271,7 +274,7 @@ class VideoCropper(QWidget):
         
         # RIGHT PANEL
         right_panel = QVBoxLayout()
-        keybindings_label = QLabel("⬅️/➡️: Prev./Next Frame • <b>Shift+</b>⬅️/➡️: Prev/Next Second • <b>Z/Y</b>: Preview Range • <b>X</b>: Next Video • <b>C/Space</b>: ▶️/⏸️ • <b>A/S</b>: Nudge Start Frame • <b>Q/W</b>: Nudge End Frame • Drag on Canvas: Create Crop ") # Updated shortcuts
+        keybindings_label = QLabel("⬅️/➡️: Prev./Next Frame • <b>Shift+</b>⬅️/➡️: Prev/Next Second • <b>Z/Y</b>: Preview Range • <b>X</b>: Next Video • <b>C/Space</b>: ▶️/⏸️ • <b>A/S/D</b>: Playback Speed • <b>Q/W</b>: Nudge Start Frame • <b>E/R</b>: Nudge End Frame • Drag on Canvas: Create Crop ")
         keybindings_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         keybindings_label.setStyleSheet("font-size: 11px; color: #ECEFF4;") # Smaller font
         right_panel.addWidget(keybindings_label)
@@ -398,8 +401,30 @@ class VideoCropper(QWidget):
         self.slider.valueChanged.connect(self.editor.scrub_video)
         right_panel.addWidget(self.slider)
 
+        clip_length_layout = QHBoxLayout()
         self.clip_length_label = QLabel("Clip Length: 0 frames | Video Length: 0 frames")
-        right_panel.addWidget(self.clip_length_label)
+        clip_length_layout.addWidget(self.clip_length_label)
+        
+        clip_length_layout.addStretch()
+        
+        clip_length_layout.addWidget(QLabel("Speed:"))
+        self.playback_speed_spinner = QDoubleSpinBox()
+        self.playback_speed_spinner.setMinimum(0.1)
+        self.playback_speed_spinner.setSingleStep(0.25)
+        self.playback_speed_spinner.setValue(1.0)
+        self.playback_speed_spinner.setFixedWidth(90)
+        self.playback_speed_spinner.setStyleSheet("padding-right: 20px;") # Ensure space for buttons
+        self.playback_speed_spinner.valueChanged.connect(self.update_playback_speed)
+        clip_length_layout.addWidget(self.playback_speed_spinner)
+        
+        self.reset_speed_button = QPushButton("1️⃣")
+        self.reset_speed_button.setToolTip("Reset Speed to 1.0")
+        self.reset_speed_button.setFixedSize(24, 24)
+        self.reset_speed_button.setStyleSheet("padding: 0px;")
+        self.reset_speed_button.clicked.connect(lambda: self.playback_speed_spinner.setValue(1.0))
+        clip_length_layout.addWidget(self.reset_speed_button)
+        
+        right_panel.addLayout(clip_length_layout)
         
         self.thumbnail_label = QWidget(self)
         self.thumbnail_label.setWindowFlags(Qt.WindowType.ToolTip)
@@ -765,6 +790,22 @@ class VideoCropper(QWidget):
                 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to delete video: {e}")
+
+    def update_playback_speed(self):
+        if self.editor.playback_timer.isActive():
+            speed = self.playback_speed_spinner.value()
+            interval = int((1000 / self.editor.current_fps) / speed) if self.editor.current_fps > 0 else int(33 / speed)
+            self.editor.playback_timer.setInterval(interval)
+
+    def decrease_playback_speed(self):
+        current = self.playback_speed_spinner.value()
+        step = self.playback_speed_spinner.singleStep()
+        self.playback_speed_spinner.setValue(max(self.playback_speed_spinner.minimum(), current - step))
+
+    def increase_playback_speed(self):
+        current = self.playback_speed_spinner.value()
+        step = self.playback_speed_spinner.singleStep()
+        self.playback_speed_spinner.setValue(min(self.playback_speed_spinner.maximum(), current + step))
 
     def jump_to_range_start(self):
         if not self.current_selected_range_id: return

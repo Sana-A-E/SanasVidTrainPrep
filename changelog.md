@@ -58,4 +58,9 @@
 
 ### Bug Fixes
 - Fixed the issue where the app would crash when opening a folder with no videos in it.
-    
+
+## [2026-04-21]
+### Added Features
+- Added Playback Speed controls. A float spinner and reset button were added to the right panel next to the Clip Length label, allowing adjustment of playback speed for both normal and range preview playback.
+- Updated Global Shortcuts: `A` to decrease playback speed, `S` to reset speed to 1.0, and `D` to increase playback speed.
+- Reassigned nudge shortcuts: `Q`/`W` now nudge the start frame, and `E`/`R` now nudge the end frame.
