@@ -197,144 +197,124 @@ class VideoEditor:
              self.main_app.thumbnail_label.hide()
 
     def toggle_loop_playback(self):
-        """Toggles playback looping within the selected range."""
-        if self.main_app.is_playing or self.is_playing_range: # Stop any other playback first
-            self.stop_playback()
-
-        self.main_app.loop_playback = not self.main_app.loop_playback
-        if self.main_app.loop_playback:
-            print("Starting loop playback...")
-            self._start_playback(loop=True)
-        else:
-            print("Stopping loop playback...")
-            self.stop_playback()
+        """
+        Legacy stub — looping is now controlled by the loop toggle button
+        (VideoCropper.toggle_loop).  This method is kept for compatibility
+        but performs no action.
+        """
+        pass
 
     def toggle_play_forward(self):
-        """Toggles normal playback from current position."""
-        if self.main_app.loop_playback or self.is_playing_range: # Stop any other playback first
+        """Toggles normal playback from the current slider position."""
+        if self.is_playing_range:  # Stop range playback before starting normal playback
             self.stop_playback()
 
         self.main_app.is_playing = not self.main_app.is_playing
         if self.main_app.is_playing:
             print("Starting normal playback...")
-            self._start_playback(loop=False)
+            self._start_playback()
         else:
             print("Stopping normal playback...")
             self.stop_playback()
             
     def toggle_range_playback(self, start_frame, end_frame):
         """Starts or stops playback limited to the given start/end frames."""
-        if self.is_playing_range: # If already playing this range, stop it
-             print("Stopping range playback...")
-             self.stop_playback()
-        elif self.main_app.is_playing or self.main_app.loop_playback: # Stop other modes first
-             print("Stopping other playback before starting range playback...")
-             self.stop_playback()
-             self._start_playback(loop=False, range_playback=True, start_frame=start_frame, end_frame=end_frame)
-        else: # Start range playback
-             self._start_playback(loop=False, range_playback=True, start_frame=start_frame, end_frame=end_frame)
+        if self.is_playing_range:  # Already playing this range — stop it
+            print("Stopping range playback...")
+            self.stop_playback()
+        else:
+            if self.main_app.is_playing:  # Stop normal playback before starting range playback
+                print("Stopping normal playback before starting range playback...")
+                self.stop_playback()
+            self._start_playback(range_playback=True, start_frame=start_frame, end_frame=end_frame)
 
-    def _start_playback(self, loop=False, range_playback=False, start_frame=None, end_frame=None):
+    def _start_playback(self, range_playback=False, start_frame=None, end_frame=None):
+        """
+        Begins the playback timer.
+
+        Args:
+            range_playback (bool): If True, confine playback to [start_frame, end_frame).
+            start_frame (int | None): First frame for range playback.
+            end_frame (int | None): Exclusive last frame for range playback.
+
+        Looping behaviour (for both modes) is controlled by
+        ``self.main_app.loop_enabled`` — a passive flag set by the UI toggle
+        button.  ``_playback_step`` checks this flag at the end of each mode.
+        """
         if not self.main_app.cap or not self.main_app.cap.isOpened():
             print("Cannot start playback: Video not ready.")
             self.main_app.is_playing = False
-            self.main_app.loop_playback = False
             self.is_playing_range = False
             return
 
-        self.main_app.is_playing = not loop and not range_playback
-        self.main_app.loop_playback = loop
+        self.main_app.is_playing = not range_playback
         self.is_playing_range = range_playback
 
-        # Determine start/end based on mode
+        # Determine start/end frame boundaries
         self.current_playback_start_frame = 0
-        self.current_playback_end_frame = self.main_app.frame_count # Default to full video
+        self.current_playback_end_frame = self.main_app.frame_count  # Default: full video
         playback_mode_msg = "normal"
 
-        if loop:
-            playback_mode_msg = "looping"
-            range_data = self.main_app.find_range_by_id(self.main_app.current_selected_range_id)
-            if range_data:
-                self.current_playback_start_frame = range_data['start']
-                self.current_playback_end_frame = range_data['end']
-                # Set starting position for loop
-                current_frame = int(self.main_app.cap.get(cv2.CAP_PROP_POS_FRAMES))
-                # If current frame outside loop range, reset to start
-                if not (self.current_playback_start_frame <= current_frame < self.current_playback_end_frame):
-                    start_seek = self.current_playback_start_frame
-                    self.main_app.cap.set(cv2.CAP_PROP_POS_FRAMES, start_seek)
-                    self.main_app.slider.setValue(start_seek)
-            else:
-                print("Cannot loop: No range selected.")
-                self.stop_playback()
-                return
-        elif range_playback:
+        if range_playback:
             playback_mode_msg = "range"
             if start_frame is not None and end_frame is not None and start_frame < end_frame:
-                 self.current_playback_start_frame = start_frame
-                 self.current_playback_end_frame = end_frame
-                 self.current_range_end_frame = end_frame # Store specifically for range check
-                 # Set starting position for range playback
-                 start_seek = self.current_playback_start_frame
-                 self.main_app.cap.set(cv2.CAP_PROP_POS_FRAMES, start_seek)
-                 self.main_app.slider.setValue(start_seek)
+                self.current_playback_start_frame = start_frame
+                self.current_playback_end_frame = end_frame
+                self.current_range_end_frame = end_frame
+                self.main_app.cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+                self.main_app.slider.setValue(start_frame)
             else:
-                 print(f"Cannot start range playback: Invalid start/end frames ({start_frame}, {end_frame})")
-                 self.stop_playback()
-                 return
-        else: # Normal play forward from current position
+                print(f"Cannot start range playback: Invalid start/end frames ({start_frame}, {end_frame})")
+                self.stop_playback()
+                return
+        else:  # Normal playback — start from current slider position
             self.current_playback_start_frame = self.main_app.slider.value()
-            # End frame remains the total frame count
 
-        print(f"Starting {playback_mode_msg} playback from {self.current_playback_start_frame} to {self.current_playback_end_frame}")
-        # Set initial frame correctly
-        initial_seek_frame = self.current_playback_start_frame
+        loop_hint = " [looping]" if self.main_app.loop_enabled else ""
+        print(f"Starting {playback_mode_msg}{loop_hint} playback from {self.current_playback_start_frame} to {self.current_playback_end_frame}")
 
-        # Seek and update display/label for the starting frame
-        print(f"Seeking to start frame {initial_seek_frame} for playback...")
-        # update_frame_display handles seek, display, slider, and label update
-        if not self.update_frame_display(initial_seek_frame):
-            print(f"Error seeking to start frame {initial_seek_frame}. Aborting playback.")
+        if not self.update_frame_display(self.current_playback_start_frame):
+            print(f"Error seeking to start frame {self.current_playback_start_frame}. Aborting playback.")
             self.stop_playback()
             return
 
-        # Use a timer for smoother playback
         speed = self.main_app.playback_speed_spinner.value()
         interval = int((1000 / self.current_fps) / speed) if self.current_fps > 0 else int(33 / speed)
         self.playback_timer.start(interval)
-        # Don't call _playback_step immediately, the timer will trigger it.
 
     def _playback_step(self):
         """Reads and displays the next frame during playback."""
-        is_active = self.main_app.is_playing or self.main_app.loop_playback or self.is_playing_range
+        is_active = self.main_app.is_playing or self.is_playing_range
         if not self.main_app.cap or not self.main_app.cap.isOpened() or not is_active:
             self.stop_playback()
             return
 
-        # Get position *before* reading
+        # Position *before* reading the next frame (cv2 POS_FRAMES = next-to-read index)
         current_frame_pos = int(self.main_app.cap.get(cv2.CAP_PROP_POS_FRAMES))
 
-        # --- Check End Conditions ---
+        # --- End-of-stream checks ---
         if self.is_playing_range and current_frame_pos >= self.current_range_end_frame:
-             print("Range playback finished.")
-             self.stop_playback()
-             # Go back to start of range after stopping?
-             self.update_frame_display(self.current_playback_start_frame)
-             return
-
-        elif self.main_app.loop_playback and current_frame_pos >= self.current_playback_end_frame:
-            print("Looping back to start...")
-            start_seek = self.current_playback_start_frame
-            self.main_app.cap.set(cv2.CAP_PROP_POS_FRAMES, start_seek)
-            current_frame_pos = start_seek # Update position for read check below
-            # No need to update slider/label here, the read below will handle it
+            if self.main_app.loop_enabled:
+                # Loop: seek back to range start and continue
+                self.main_app.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_playback_start_frame)
+                current_frame_pos = self.current_playback_start_frame
+                print("Range playback looping back to start frame...")
+            else:
+                print("Range playback finished.")
+                self.stop_playback()
+                self.update_frame_display(self.current_playback_start_frame)
+                return
 
         elif self.main_app.is_playing and current_frame_pos >= self.current_playback_end_frame:
-            print("Normal playback finished.")
-            self.stop_playback()
-            # Update label to show the last frame?
-            # self.main_app.update_current_frame_label(self.main_app.frame_count - 1, self.main_app.frame_count, self.current_fps)
-            return
+            if self.main_app.loop_enabled:
+                # Loop: seek back to the very first frame of the video
+                self.main_app.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                current_frame_pos = 0
+                print("Normal playback looping back to frame 0...")
+            else:
+                print("Normal playback finished.")
+                self.stop_playback()
+                return
 
         # --- Read and Display Frame ---
         ret, frame = self.main_app.cap.read()
@@ -364,19 +344,20 @@ class VideoEditor:
             self.main_app.update_current_frame_label(last_known_frame, self.main_app.frame_count, self.current_fps)
 
     def stop_playback(self):
-        """Stops any active playback timer and resets flags."""
+        """Stops any active playback timer and resets transient playback flags.
+
+        Note: ``loop_enabled`` is intentionally NOT reset here because it is a
+        persistent user preference controlled by the loop toggle button.
+        """
         was_active = self.playback_timer.isActive()
         if was_active:
             self.playback_timer.stop()
             print("Playback timer stopped.")
 
-        # Reset flags regardless of timer state
+        # Reset transient flags only
         self.main_app.is_playing = False
-        self.main_app.loop_playback = False
         self.is_playing_range = False
         self.current_range_end_frame = -1
-
-        # No need to update label here usually, last frame display should be correct
 
     def next_clip(self):
         # This should advance the main video list selection

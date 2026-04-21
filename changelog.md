@@ -64,3 +64,7 @@
 - Added Playback Speed controls. A float spinner and reset button were added to the right panel next to the Clip Length label, allowing adjustment of playback speed for both normal and range preview playback.
 - Updated Global Shortcuts: `A` to decrease playback speed, `S` to reset speed to 1.0, and `D` to increase playback speed.
 - Reassigned nudge shortcuts: `Q`/`W` now nudge the start frame, and `E`/`R` now nudge the end frame.
+- **Loop Toggle Button**: The 🔁 button (next to the speed controls) is now a functional toggle. Click it to enable or disable playback looping.
+  - When **Loop is ON**, normal playback (C / Space) restarts from frame 0 when the video ends; Range preview (Z / Y) restarts from the range's start frame when it reaches the range's end frame.
+  - When **Loop is OFF** (default), playback stops as before.
+  - The button changes colour (blue highlight = ON, muted = OFF) and its tooltip dynamically describes the current state and what clicking will do.

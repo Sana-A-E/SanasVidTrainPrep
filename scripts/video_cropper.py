@@ -48,7 +48,7 @@ class VideoCropper(QWidget):
 
         # Playback state (mostly unchanged)
         self.is_playing = False
-        self.loop_playback = False # Will apply to selected range
+        self.loop_enabled = False  # When True, playback loops (normal: whole video; range: within range bounds)
 
         # Export properties (mostly unchanged for now)
         self.export_uncropped = False
@@ -423,6 +423,14 @@ class VideoCropper(QWidget):
         self.reset_speed_button.setStyleSheet("padding: 0px;")
         self.reset_speed_button.clicked.connect(lambda: self.playback_speed_spinner.setValue(1.0))
         clip_length_layout.addWidget(self.reset_speed_button)
+
+        self.loop_button = QPushButton("🔁")
+        self.loop_button.setCheckable(True)
+        self.loop_button.setChecked(False)
+        self.loop_button.setFixedSize(24, 24)
+        self.loop_button.clicked.connect(self.toggle_loop)
+        self._update_loop_button_style()
+        clip_length_layout.addWidget(self.loop_button)
         
         right_panel.addLayout(clip_length_layout)
         
@@ -806,6 +814,62 @@ class VideoCropper(QWidget):
         current = self.playback_speed_spinner.value()
         step = self.playback_speed_spinner.singleStep()
         self.playback_speed_spinner.setValue(min(self.playback_speed_spinner.maximum(), current + step))
+
+    def toggle_loop(self):
+        """
+        Toggles playback looping on or off.
+
+        When looping is enabled:
+        - Normal playback (C / Space) will loop from the last video frame back to frame 0.
+        - Range preview (Z / Y) will loop from the range's end frame back to its start frame.
+
+        The loop button appearance and tooltip are updated to reflect the current state.
+        """
+        self.loop_enabled = self.loop_button.isChecked()
+        self._update_loop_button_style()
+
+    def _update_loop_button_style(self):
+        """
+        Applies a visual style to the loop button that reflects whether looping is
+        currently enabled (highlighted / accent colour) or disabled (plain / muted).
+        Also updates the tooltip to clearly communicate the current state.
+        """
+        if self.loop_enabled:
+            self.loop_button.setToolTip(
+                "<b>Loop: ON</b><br>"
+                "Playback will restart automatically when it reaches the end.<br>"
+                "<i>Normal playback</i> loops the whole video.<br>"
+                "<i>Range preview</i> loops within the selected range.<br>"
+                "Click to turn looping <b>off</b>."
+            )
+            self.loop_button.setStyleSheet(
+                "QPushButton {"
+                "  padding: 0px;"
+                "  background-color: #3A6EA5;"   # accent blue when ON
+                "  border: 1px solid #5A9ED6;"
+                "  border-radius: 3px;"
+                "}"
+                "QPushButton:hover {"
+                "  background-color: #4A7EB5;"
+                "}"
+            )
+        else:
+            self.loop_button.setToolTip(
+                "<b>Loop: OFF</b><br>"
+                "Playback stops at the end of the video / range.<br>"
+                "Click to turn looping <b>on</b>."
+            )
+            self.loop_button.setStyleSheet(
+                "QPushButton {"
+                "  padding: 0px;"
+                "  background-color: transparent;"
+                "  border: 1px solid #555555;"
+                "  border-radius: 3px;"
+                "}"
+                "QPushButton:hover {"
+                "  background-color: #3A3A3A;"
+                "}"
+            )
 
     def jump_to_range_start(self):
         if not self.current_selected_range_id: return
