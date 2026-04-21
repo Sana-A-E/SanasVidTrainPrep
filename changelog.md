@@ -50,3 +50,12 @@
 ### Added Features
 - The app now remembers the last opened folder and automatically reopens it on startup.
 - Opening a previously opened folder now scans for newly added videos and includes them, instead of only loading previous session data.
+
+### UX Improvements
+- Added global keyboard shortcuts for all frame navigation controls in the top row. They will now trigger regardless of widget focus.
+- Added spacebar as a global keyboard shortcut for play/pause normal playback.
+- **Delete Video** button now doesn't need confirmation before deletion. Since it moves the selected video to the Recycle Bin instead of permanently deleting it anyway, why not save that extra click?
+
+### Bug Fixes
+- Fixed the issue where the app would crash when opening a folder with no videos in it.
+    

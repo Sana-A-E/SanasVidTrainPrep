@@ -169,6 +169,20 @@ class VideoCropper(QWidget):
         self.play_range_button.clicked.connect(self.toggle_play_selected_range) # New method
         QShortcut(QKeySequence("Z"), self).activated.connect(self.toggle_play_selected_range)
         QShortcut(QKeySequence("Y"), self).activated.connect(self.toggle_play_selected_range)
+        
+        # Global shortcuts
+        QShortcut(QKeySequence(Qt.Key.Key_Right), self).activated.connect(self._shortcut_frame_forward)
+        QShortcut(QKeySequence(Qt.KeyboardModifier.ShiftModifier | Qt.Key.Key_Right), self).activated.connect(self._shortcut_second_forward)
+        QShortcut(QKeySequence(Qt.Key.Key_Left), self).activated.connect(self._shortcut_frame_backward)
+        QShortcut(QKeySequence(Qt.KeyboardModifier.ShiftModifier | Qt.Key.Key_Left), self).activated.connect(self._shortcut_second_backward)
+        QShortcut(QKeySequence("X"), self).activated.connect(self._shortcut_next_video)
+        QShortcut(QKeySequence("C"), self).activated.connect(self._shortcut_play_pause)
+        QShortcut(QKeySequence(Qt.Key.Key_Space), self).activated.connect(self._shortcut_play_pause)
+        QShortcut(QKeySequence("A"), self).activated.connect(lambda: self.nudge_start_frame(-1) if self.current_selected_range_id else None)
+        QShortcut(QKeySequence("S"), self).activated.connect(lambda: self.nudge_start_frame(1) if self.current_selected_range_id else None)
+        QShortcut(QKeySequence("Q"), self).activated.connect(lambda: self.nudge_end_frame(-1) if self.current_selected_range_id else None)
+        QShortcut(QKeySequence("W"), self).activated.connect(lambda: self.nudge_end_frame(1) if self.current_selected_range_id else None)
+        
         range_button_layout.addWidget(self.play_range_button)
         range_layout.addLayout(range_button_layout)
 
@@ -257,7 +271,7 @@ class VideoCropper(QWidget):
         
         # RIGHT PANEL
         right_panel = QVBoxLayout()
-        keybindings_label = QLabel("⬅️/➡️: Prev./Next Frame • <b>Shift+</b>⬅️/➡️: Prev/Next Second • <b>Z/Y</b>: Preview Range • <b>X</b>: Next Video • <b>C</b>: ▶️/⏸️ • <b>A/S</b>: Nudge Start Frame • <b>Q/W</b>: Nudge End Frame • Drag on Canvas: Create Crop ") # Updated shortcuts
+        keybindings_label = QLabel("⬅️/➡️: Prev./Next Frame • <b>Shift+</b>⬅️/➡️: Prev/Next Second • <b>Z/Y</b>: Preview Range • <b>X</b>: Next Video • <b>C/Space</b>: ▶️/⏸️ • <b>A/S</b>: Nudge Start Frame • <b>Q/W</b>: Nudge End Frame • Drag on Canvas: Create Crop ") # Updated shortcuts
         keybindings_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         keybindings_label.setStyleSheet("font-size: 11px; color: #ECEFF4;") # Smaller font
         right_panel.addWidget(keybindings_label)
@@ -713,46 +727,44 @@ class VideoCropper(QWidget):
     def delete_current_video(self):
         if not self.current_video_original_path: return
         
-        reply = QMessageBox.question(self, "Delete Video", f"Are you sure you want to move this file to the recycle bin?\n\n{self.current_video_original_path}", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if reply == QMessageBox.StandardButton.Yes:
-            try:
-                # Stop active playback and release the video handle to prevent
-                # WinError 32 (file in use by another process) on deletion.
-                self.editor.stop_playback()
-                if self.cap:
-                    self.cap.release()
-                    self.cap = None
+        try:
+            # Stop active playback and release the video handle to prevent
+            # WinError 32 (file in use by another process) on deletion.
+            self.editor.stop_playback()
+            if self.cap:
+                self.cap.release()
+                self.cap = None
 
-                send2trash.send2trash(self.current_video_original_path)
+            send2trash.send2trash(self.current_video_original_path)
 
-                for i in range(self.video_list.count()):
-                    item = self.video_list.item(i)
-                    if getattr(item, 'original_path', None) == self.current_video_original_path or item.text().startswith(os.path.basename(self.current_video_original_path)): 
-                        row = self.video_list.row(item)
-                        self.video_list.takeItem(row) # Automatically removes from UI
-                        break
-                        
-                self.video_files = [v for v in self.video_files if v["original_path"] != self.current_video_original_path]
-                if self.current_video_original_path in self.video_data:
-                    del self.video_data[self.current_video_original_path]
-
-                self.current_video_original_path = None
-                
-                # Check next item and load it
-                if self.video_list.count() > 0:
-                    self.video_list.setCurrentRow(0)
-                else:
-                    self.scene.clear()
-                    self.scene.update()
-                    self.graphics_view.update()
-                    self.slider.setEnabled(False)
-                    self.slider.setValue(0)
-                    self.start_frame_input.setText("0")
-                    self.end_frame_input.setText("0")
-                    self.duration_input.setText("0")
+            for i in range(self.video_list.count()):
+                item = self.video_list.item(i)
+                if getattr(item, 'original_path', None) == self.current_video_original_path or item.text().startswith(os.path.basename(self.current_video_original_path)): 
+                    row = self.video_list.row(item)
+                    self.video_list.takeItem(row) # Automatically removes from UI
+                    break
                     
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to delete video: {e}")
+            self.video_files = [v for v in self.video_files if v["original_path"] != self.current_video_original_path]
+            if self.current_video_original_path in self.video_data:
+                del self.video_data[self.current_video_original_path]
+
+            self.current_video_original_path = None
+            
+            # Check next item and load it
+            if self.video_list.count() > 0:
+                self.video_list.setCurrentRow(0)
+            else:
+                self.pixmap_item.setPixmap(QPixmap())
+                self.clear_crop_region_controller()
+                self.graphics_view.update()
+                self.slider.setEnabled(False)
+                self.slider.setValue(0)
+                self.start_frame_input.setText("0")
+                self.end_frame_input.setText("0")
+                self.duration_input.setText("0")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to delete video: {e}")
 
     def jump_to_range_start(self):
         if not self.current_selected_range_id: return
@@ -786,72 +798,7 @@ class VideoCropper(QWidget):
 
     def keyPressEvent(self, event):
         key = event.key()
-        modifiers = event.modifiers()
-
-        # Focus check: Only handle frame keys if graphics view or slider has focus?
-        # Or allow always? Let's allow always for now.
-        # focused_widget = QApplication.focusWidget()
-        # allow_frame_nav = focused_widget is self.graphics_view or focused_widget is self.slider
-
-        if key == Qt.Key.Key_Right: # Frame Forward / Jump Forward
-            if self.slider.isEnabled(): # Only if video loaded
-                if modifiers == Qt.KeyboardModifier.ShiftModifier:
-                    self.editor.jump_frames(1.0) # Jump 1 second forward
-                else:
-                    self.editor.step_frame(1) # Step 1 frame forward
-                event.accept()
-            else:
-                super().keyPressEvent(event)
-        elif key == Qt.Key.Key_Left: # Frame Backward / Jump Backward
-             if self.slider.isEnabled(): # Only if video loaded
-                if modifiers == Qt.KeyboardModifier.ShiftModifier:
-                    self.editor.jump_frames(-1.0) # Jump 1 second backward
-                else:
-                    self.editor.step_frame(-1) # Step 1 frame backward
-                event.accept()
-             else:
-                super().keyPressEvent(event)
-
-        elif key == Qt.Key.Key_Z or key == Qt.Key.Key_Y: # Preview selected range
-            # No change needed, handled by button connection now, but keep shortcut
-            self.editor.toggle_loop_playback()
-            event.accept()
-        elif key == Qt.Key.Key_X: # Next Video
-            self.editor.next_clip()
-            event.accept()
-        elif key == Qt.Key.Key_C: # Play/Pause Normal
-             if self.slider.isEnabled():
-                self.editor.toggle_play_forward()
-                event.accept()
-             else:
-                 super().keyPressEvent(event)
-        elif key == Qt.Key.Key_Q: # Nudge End Frame Left
-            if self.current_selected_range_id:
-                self.nudge_end_frame(-1)
-                event.accept()
-            else:
-                super().keyPressEvent(event)
-        elif key == Qt.Key.Key_W: # Nudge End Frame Right
-            if self.current_selected_range_id:
-                self.nudge_end_frame(1)
-                event.accept()
-            else:
-                super().keyPressEvent(event)
-        elif key == Qt.Key.Key_A: # Nudge Start Frame Left
-            # This needs adjustment to update duration correctly when start moves
-            if self.current_selected_range_id:
-                self.nudge_start_frame(-1)
-                event.accept()
-            else:
-                super().keyPressEvent(event)
-        elif key == Qt.Key.Key_S: # Nudge Start Frame Right
-             # This needs adjustment to update duration correctly when start moves
-             if self.current_selected_range_id:
-                self.nudge_start_frame(1)
-                event.accept()
-             else:
-                super().keyPressEvent(event)
-        elif key == Qt.Key.Key_Delete or key == Qt.Key.Key_Backspace:
+        if key == Qt.Key.Key_Delete or key == Qt.Key.Key_Backspace:
             # Delete selected range if range list has focus
             if self.clip_range_list.hasFocus() and self.current_selected_range_id:
                 self.remove_selected_range()
@@ -860,6 +807,24 @@ class VideoCropper(QWidget):
                 super().keyPressEvent(event)
         else:
             super().keyPressEvent(event)
+
+    def _shortcut_frame_forward(self):
+        if self.slider.isEnabled(): self.editor.step_frame(1)
+        
+    def _shortcut_second_forward(self):
+        if self.slider.isEnabled(): self.editor.jump_frames(1.0)
+        
+    def _shortcut_frame_backward(self):
+        if self.slider.isEnabled(): self.editor.step_frame(-1)
+        
+    def _shortcut_second_backward(self):
+        if self.slider.isEnabled(): self.editor.jump_frames(-1.0)
+        
+    def _shortcut_next_video(self):
+        self.editor.next_clip()
+        
+    def _shortcut_play_pause(self):
+        if self.slider.isEnabled(): self.editor.toggle_play_forward()
 
     def nudge_start_frame(self, delta):
         if not self.current_selected_range_id: return

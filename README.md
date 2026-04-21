@@ -1,26 +1,26 @@
 # Sana's VidTrainPrep
-This is Sana's fork of VidTrainPrep, aiming to fix some bugs, improve usability/UX, translate French strings to English and add usefull missing functionality. 
+This is Sana's fork of VidTrainPrep, aiming to fix bugs, add quality of life improvements and usefull missing functionality.
 
-The code is mostly done with Gemini as it is faster than doing it by hand, (and because Python isn't my speciality), so I can't guarantee that there won't be regressions or bugs. However, as I am activelly using the app, the bugs I notice, I will of course fix.
+The code is mostly done with Gemini as it is faster than doing it by hand, (and because Python isn't my speciality), so I can't guarantee that there won't be regressions or bugs. However, as I am activelly using the app, the bugs I notice, I will of course fix. (In my personal experience, the app is much more usable and stable than the original.)
 
-If I don't notice them (because they are in the part of the app functionality I rarely use) feel free to report them, and I might take the time to fix them, but as I am primarily working on this for my own use, if your requests or bugs don't align with my needs, the chances are not high that I will take them on. Don't expect anything. I just wanted to share this in case anyone else needs their video dataset prep app to be more stable and feature complete.
+If I don't notice the bugs (because they are in the part of the app functionality I rarely use) feel free to report them and I might fix them. No promises though. I just wanted to share this in case anyone else needs their video dataset prep app to be more stable and feature complete.
 
 I will not be working further on the captioning aspect of the app, nor upgrading/fixing the Gemini API as there are other apps that do captioning better (I recommend [Vision Captioner](https://github.com/Brekel/VisionCaptioner).)
 
 ## Most notable changes:
 - Fixed drawing of crop regions to actually work without causing app crashes. Crop region can now be properly resized and moved after creation as you would expect.
-- Added "Export All Ranges as Defined" checkbox to the export options in the left pane. This should be more useful than the other two export options, as it exports all defined ranges once - cropped if they have a crop rect defined, and uncropped if they don't. This is the new default export method
+- Added **"Export All Ranges as Defined"** checkbox to the export options in the left pane. This should be more useful than the other two export options, as it exports all defined ranges once - cropped if they have a crop rect defined, and uncropped if they don't. This is the new default export method
 - Session data is now sanitized to remove videos and folders that no longer exist.
 - The app now remembers the last opened folder and automatically reopens it on startup.
 - Opening a previously opened folder now scans for newly added videos and includes them, instead of only loading previous session data.
 - The UI layout was reorganized to reduce space wastage, and tooltips were added to clarify function/usage of elements.
-- Made the "Start Frame" text box editable, updating the current clip range when editing is finished. You can now manually edit start of your range and even create overlapping ranges.
-- Added "End Frame" text box next to "Start Frame" text box for range selection to enable you to set your clip range based on a specific end frame instead of just duration.
-- Range logic synchronization: start frame, end frame, and duration are now linked and recalculate based on the most recently modified property. When recalculation is triggered, the most recently modified properties are preserved while the oldest one is synced to the other two.
-- Support for keyboard shortcut `Y` for "Preview Range" alongside existing `Z` key (to accommodate QWERTZ keyboards). Also implemented global keyboard shortcuts for "Preview Range" (Z/Y) to ensure they work regardless of widget focus.
-- Frame navigation sub-controls added: "Start Frame", "End Frame" jump buttons to quickly navigate to the start and end frames of the current clip range.
-- Range boundary update controls added: "Update Start F." and "Update End F." to make it easy to quickly change the start and end frames of the range to match the current frame.
-- Added "Export Current Frame" button to export the current frame with applied crop and fixed resolution settings. Useful if you want to extract specific frames from your footage for captioning or to include it as a high res image in your dataset.
+- Made the **"Start Frame"** text box editable, updating the current clip range when editing is finished. You can now manually edit start of your range and even create overlapping ranges.
+- Added **"End Frame"** text box next to "Start Frame" text box for range selection to enable you to set your clip range based on a specific end frame instead of just duration.
+- **Range logic synchronization:** start frame, end frame, and duration are now linked and recalculate based on the most recently modified property. When recalculation is triggered, the most recently modified properties are preserved while the oldest one is synced to the other two.
+- Support for keyboard shortcut `Y` for **"Preview Range"** alongside existing `Z` key (to accommodate QWERTZ keyboards) and `Spacebar` for video playback. Also all keyboard shortcuts are now global, meaning they will work regardless of widget focus.
+- Frame navigation sub-controls added: **"Start Frame"**, **"End Frame"** jump buttons to quickly navigate to the start and end frames of the current clip range.
+- Range boundary update controls added: **"Update Start F."** and **"Update End F."** to make it easy to quickly change the start and end frames of the range to match the current frame.
+- Added **"Export Current Frame"** button to export the current frame with applied crop and fixed resolution settings. Useful if you want to extract specific frames from your footage for captioning or to include it as a high res image in your dataset.
 
 [View all changes in Changelog](changelog.md).
 
