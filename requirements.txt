@@ -5,3 +5,4 @@ numpy
 google-generativeai
 Pillow
 send2trash
+pyspellchecker==0.8.1

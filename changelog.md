@@ -98,3 +98,17 @@
 - **New Range inherits crop** — clicking **➕ Add Range** while a range with a crop rectangle is selected now creates the new range with that same crop rect pre-applied, avoiding repetitive manual re-drawing of the same crop region for each clip.
 - Fixed `QSpinBox` and `QDoubleSpinBox` up/down buttons display in dark mode by implementing proper CSS positioning and custom triangle arrow icons.
 - Made buttons more compact.
+
+## [2026-04-23 — Captioning Tab]
+### Added Features
+- **Caption editor in Captioning tab**: A multiline text editor (`QTextEdit`) now appears in the Captioning tab. It automatically loads the `.txt` file that shares the same name as the selected video (e.g. `clip.mp4` → `clip.txt`). If no file exists yet, starting to type creates it.
+- **English US spellchecking**: Misspelled words are underlined in red using a `QSyntaxHighlighter` backed by the `pyspellchecker` library.
+- **Auto-save with data-safety guarantees**:
+  - Saves are debounced — the disk write fires 800 ms after the last keystroke, so rapid typing never hammers the disk.
+  - Writes use an atomic strategy: text is first written to a sibling `.tmp` file with `flush()` + `os.fsync()` (forces OS write-cache to physical disk), then swapped in via `os.replace()` (NTFS-atomic). The caption file is therefore never left in a corrupt or truncated state — safe even through a hard power cut.
+  - On app close any pending debounced save is flushed immediately, so no work is lost even if the window is closed right after the last keystroke.
+- **📄 Create Copy of the Caption File** button: creates a numbered duplicate (`<stem>_01.txt`, `_02.txt`, …, first free suffix) and shows a confirmation dialog with the new filename.
+- **📂 Open Caption File in Windows Explorer** button: opens the video folder in Explorer with the `.txt` file pre-selected.
+- **📝 Open Caption File in Windows Explorer** right-click context-menu entry added to the video list: shown only when a caption file actually exists for the right-clicked video.
+- `scripts/caption_manager.py` [new module]: pure I/O helper with `get_caption_path`, `load_caption`, `save_caption_atomic`, `copy_caption`, and `caption_exists`.
+- `scripts/spellcheck_highlighter.py` [new module]: `QSyntaxHighlighter` subclass wrapping `pyspellchecker`.  Degrades gracefully (no-op + warning) when the library is missing.

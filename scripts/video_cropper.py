@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QFileDialog, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QListWidget, QSlider, QGraphicsPixmapItem, QLineEdit, QSpinBox, QDoubleSpinBox,
     QSizePolicy, QCheckBox, QListWidgetItem, QComboBox, QMessageBox, QDialog, QFormLayout, QDialogButtonBox,
-    QSpacerItem, QTabWidget, QToolButton,
+    QSpacerItem, QTabWidget, QToolButton, QTextEdit,
 )
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QIcon, QMouseEvent, QIntValidator, QKeySequence, QShortcut
 from PyQt6.QtCore import Qt, QTimer, QRectF
@@ -18,6 +18,9 @@ from scripts.video_loader import VideoLoader
 from scripts.video_editor import VideoEditor
 from scripts.video_exporter import VideoExporter
 from scripts.video_file_operator import VideoFileOperator
+from scripts.caption_manager import (
+    get_caption_path, load_caption, save_caption_atomic, copy_caption, caption_exists,
+)
 
 class VideoCropper(QWidget):
     def __init__(self):
@@ -713,10 +716,75 @@ class VideoCropper(QWidget):
         video_editing_layout.addStretch(1)
         self.tabs.addTab(video_editing_tab, "Video Editing")
 
-        # Tab 3: 
+        # Tab 3: Captioning
         caption_tab = QWidget()
         caption_layout = QVBoxLayout(caption_tab)
-        caption_layout.addStretch(1)
+        caption_layout.setContentsMargins(8, 8, 8, 8)
+        caption_layout.setSpacing(6)
+
+        caption_label = QLabel("<b>Caption Text</b>")
+        caption_label.setToolTip(
+            "<b>Caption Editor</b><br>"
+            "Displays and edits the <code>.txt</code> file that shares the same name "
+            "as the selected video.<br>"
+            "Changes are saved automatically ~0.8 s after you stop typing.<br>"
+            "The file is created automatically if it does not exist yet.<br><br>"
+            "Spellchecking is active (English&nbsp;US) — misspelled words are "
+            "underlined in red."
+        )
+        caption_layout.addWidget(caption_label)
+
+        self.caption_edit = SpellingTextEdit()
+        self.caption_edit.setAcceptRichText(False)   # Plain text only
+        self.caption_edit.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.caption_edit.setPlaceholderText(
+            "No caption file found for this video. Start typing to create one\u2026"
+        )
+        self.caption_edit.setToolTip(
+            "<b>Caption Text</b><br>"
+            "Edits the <code>.txt</code> caption file co-located with the current video.<br>"
+            "Misspelled words are underlined in red (English&nbsp;US dictionary).<br>"
+            "Right-click on a red-underlined word for corrections."
+        )
+
+        # Attach the English-US spell-check highlighter
+        from scripts.spellcheck_highlighter import SpellCheckHighlighter
+        self._spellcheck_highlighter = SpellCheckHighlighter(self.caption_edit.document())
+        self.caption_edit.set_highlighter(self._spellcheck_highlighter)
+
+        # Debounce timer — fires 800 ms after the last keystroke
+        self._caption_save_timer = QTimer(self)
+        self._caption_save_timer.setSingleShot(True)
+        self._caption_save_timer.setInterval(800)
+        self._caption_save_timer.timeout.connect(self._save_caption_now)
+        self.caption_edit.textChanged.connect(self._on_caption_text_changed)
+
+        caption_layout.addWidget(self.caption_edit, 1)
+
+        # Bottom action buttons
+        caption_btn_layout = QHBoxLayout()
+
+        self.create_caption_copy_button = QPushButton("\U0001f4c4 Create Copy of the Caption File")
+        self.create_caption_copy_button.setToolTip(
+            "<b>Create Copy of the Caption File</b><br>"
+            "Saves a duplicate of the current <code>.txt</code> caption file "
+            "with a numbered suffix:<br>"
+            "<code>&lt;name&gt;_01.txt</code>, <code>&lt;name&gt;_02.txt</code>, \u2026 "
+            "(first free number)."
+        )
+        self.create_caption_copy_button.clicked.connect(self._create_caption_copy)
+        caption_btn_layout.addWidget(self.create_caption_copy_button)
+
+        self.open_caption_explorer_button = QPushButton("\U0001f4c2 Open Caption File in Windows Explorer")
+        self.open_caption_explorer_button.setToolTip(
+            "<b>Open Caption File in Windows Explorer</b><br>"
+            "Opens the video\u2019s folder in Windows Explorer with the caption "
+            "<code>.txt</code> file pre-selected."
+        )
+        self.open_caption_explorer_button.clicked.connect(self._open_caption_in_explorer)
+        caption_btn_layout.addWidget(self.open_caption_explorer_button)
+
+        caption_layout.addLayout(caption_btn_layout)
         self.tabs.addTab(caption_tab, "Captioning")
 
         # Tab 4: Gemini Captioning
@@ -941,6 +1009,9 @@ class VideoCropper(QWidget):
         # Autoplay after the video has loaded (frame count will be > 0 if load succeeded)
         if self.frame_count > 0 and self.slider.isEnabled():
             self.editor.toggle_play_forward()
+        # Populate the Captioning tab with any existing .txt file for this video
+        if self.current_video_original_path:
+            self._load_caption_for_video(self.current_video_original_path)
 
     def _show_video_list_context_menu(self, pos):
         """
@@ -965,13 +1036,22 @@ class VideoCropper(QWidget):
             return
 
         menu = QMenu(self)
-        menu.setMinimumWidth(220)
+        menu.setMinimumWidth(250)
 
         copy_action = menu.addAction("📋 Copy Path")
         copy_action.setToolTip("Copy the absolute file path to the clipboard")
 
         explorer_action = menu.addAction("📂 Open in Windows Explorer")
         explorer_action.setToolTip("Open the containing folder and select this file")
+
+        # Only show the caption action when the .txt file actually exists
+        caption_ctx_action = None
+        if caption_exists(video_path):
+            caption_ctx_action = menu.addAction("\U0001f4dd Open Caption File in Windows Explorer")
+            caption_ctx_action.setToolTip(
+                "Open the video\u2019s folder in Windows Explorer with the caption "
+                "<code>.txt</code> file pre-selected."
+            )
 
         action = menu.exec(self.video_list.mapToGlobal(pos))
 
@@ -981,6 +1061,9 @@ class VideoCropper(QWidget):
         elif action == explorer_action:
             # /select, highlights the specific file inside Explorer
             subprocess.Popen(['explorer', '/select,', os.path.normpath(video_path)])
+        elif caption_ctx_action and action == caption_ctx_action:
+            caption_path = get_caption_path(video_path)
+            subprocess.Popen(['explorer', '/select,', os.path.normpath(caption_path)])
 
     def delete_all_selected_videos(self):
         """
@@ -1305,8 +1388,102 @@ class VideoCropper(QWidget):
                 self.thumbnail_label.hide()
         return False
 
+    # ── Caption file management ───────────────────────────────────────────────
+
+    def _load_caption_for_video(self, video_path: str) -> None:
+        """
+        Populate the Captioning tab text editor with the content of the
+        caption file co-located with ``video_path``.
+
+        Signals are blocked while loading so that reading existing text from
+        disk does not arm the auto-save debounce timer.
+
+        Args:
+            video_path (str): Absolute path to the currently selected video.
+        """
+        text = load_caption(video_path)
+        # Block signals so the load does not trigger _on_caption_text_changed
+        self.caption_edit.blockSignals(True)
+        self.caption_edit.setPlainText(text)
+        self.caption_edit.blockSignals(False)
+
+    def _on_caption_text_changed(self) -> None:
+        """
+        Slot connected to ``QTextEdit.textChanged``.
+
+        Restarts the single-shot debounce timer every time the user edits the
+        caption.  The actual disk write happens in ``_save_caption_now`` once
+        800 ms of inactivity have elapsed.
+        """
+        if self.current_video_original_path:
+            self._caption_save_timer.start()  # (Re)start the single-shot timer
+
+    def _save_caption_now(self) -> None:
+        """
+        Immediately write the current caption text to disk.
+
+        Uses an atomic write strategy (temp file + os.replace + os.fsync)
+        via ``CaptionManager.save_caption_atomic`` so the file is never left
+        corrupt or truncated, even after a hard power cut.
+        """
+        if not self.current_video_original_path:
+            return
+        text = self.caption_edit.toPlainText()
+        save_caption_atomic(self.current_video_original_path, text)
+
+    def _create_caption_copy(self) -> None:
+        """
+        Create a numbered copy of the current video's caption file.
+
+        The copy is named ``<stem>_01.txt``, ``<stem>_02.txt``, etc., using
+        the first suffix that is not already taken.  Any unsaved edits are
+        flushed to disk before the copy is made.
+        """
+        if not self.current_video_original_path:
+            QMessageBox.warning(self, "No Video Selected",
+                                "Please select a video first.")
+            return
+
+        # Flush unsaved edits before copying
+        if self._caption_save_timer.isActive():
+            self._caption_save_timer.stop()
+            self._save_caption_now()
+
+        new_path = copy_caption(self.current_video_original_path)
+        if new_path:
+            print(f"\u2705 Caption copy created: {new_path}")
+            QMessageBox.information(
+                self, "Copy Created",
+                f"Caption copy saved as:\n{os.path.basename(new_path)}"
+            )
+        else:
+            QMessageBox.warning(
+                self, "Copy Failed",
+                "Could not create a caption copy.\n"
+                "Make sure a caption file exists for the selected video."
+            )
+
+    def _open_caption_in_explorer(self) -> None:
+        """
+        Open the video\u2019s folder in Windows Explorer with the caption
+        ``.txt`` file pre-selected.
+
+        If no caption file exists yet the folder is opened without a
+        selection (Explorer\u2019s default behaviour for a missing file path).
+        """
+        if not self.current_video_original_path:
+            QMessageBox.warning(self, "No Video Selected",
+                                "Please select a video first.")
+            return
+        caption_path = get_caption_path(self.current_video_original_path)
+        subprocess.Popen(['explorer', '/select,', os.path.normpath(caption_path)])
+
     def closeEvent(self, event):
-        self.loader.save_session() # save_session needs update
+        # Flush any pending caption auto-save so no text is lost on exit
+        if hasattr(self, '_caption_save_timer') and self._caption_save_timer.isActive():
+            self._caption_save_timer.stop()
+            self._save_caption_now()
+        self.loader.save_session()
         event.accept()
 
     def select_range(self, item):
@@ -2106,6 +2283,61 @@ class ConvertFpsDialog(QDialog):
              return None, None
         # Add more validation for subdir name (e.g., no invalid characters)?
         return fps, subdir
+
+# ── Custom Widgets ────────────────────────────────────────────────────────────
+
+class SpellingTextEdit(QTextEdit):
+    """
+    A QTextEdit subclass that provides spelling suggestions via a right-click
+    context menu. It works in tandem with SpellCheckHighlighter.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.highlighter = None
+
+    def set_highlighter(self, highlighter):
+        """Sets the highlighter instance used for spellchecking."""
+        self.highlighter = highlighter
+
+    def contextMenuEvent(self, event):
+        """Overrides contextMenuEvent to add spelling suggestions."""
+        menu = self.createStandardContextMenu()
+        
+        if not self.highlighter:
+            menu.exec(event.globalPos())
+            return
+
+        # Find the word at the clicked position
+        cursor = self.cursorForPosition(event.pos())
+        cursor.select(cursor.SelectionType.WordUnderCursor)
+        word = cursor.selectedText()
+
+        if word and self.highlighter.is_misspelled(word):
+            suggestions = self.highlighter.get_suggestions(word)
+            
+            if suggestions:
+                menu.addSeparator()
+                suggestion_menu = menu.addMenu("\U0001f52e Suggestions")
+                for s in suggestions:
+                    action = suggestion_menu.addAction(s)
+                    # Use a lambda with captured values to replace the word
+                    action.triggered.connect(lambda checked, replacement=s, c=cursor: self._replace_word(c, replacement))
+            
+            # Option to add to dictionary
+            add_action = menu.addAction("\u2795 Add to Dictionary")
+            add_action.triggered.connect(lambda: self._add_to_dictionary(word))
+            menu.addSeparator()
+
+        menu.exec(event.globalPos())
+
+    def _replace_word(self, cursor, replacement):
+        """Replaces the word at the cursor with the selected suggestion."""
+        cursor.insertText(replacement)
+
+    def _add_to_dictionary(self, word):
+        """Adds a word to the spellchecker's session dictionary."""
+        if self.highlighter:
+            self.highlighter.add_word(word)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

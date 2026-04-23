@@ -238,6 +238,21 @@ QLabel#clip_length_label {
     padding-left: 5px;
 }
 
+QTextEdit {
+    background-color: #3C3C3C;
+    color: #E0E0E0;
+    border: 1px solid #555555;
+    border-radius: 4px;
+    padding: 5px;
+    selection-background-color: #4A6A9A;
+    selection-color: #FFFFFF;
+}
+
+QTextEdit[readOnly="true"] {
+    background-color: #484848;
+    color: #AAAAAA;
+}
+
 QMenu {
-    padding: 4px -5px;
+    padding: 4px 0px;
 }

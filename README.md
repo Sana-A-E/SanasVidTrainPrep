@@ -1,7 +1,7 @@
 # Sana's VidTrainPrep
-This is Sana's fork of VidTrainPrep, aiming to fix bugs, add quality of life improvements and usefull missing functionality.
+This is Sana's fork of VidTrainPrep, aiming to fix bugs, add quality of life improvements and useful missing functionality.
 
-The code is mostly done with AI assistance as it is faster than doing it by hand, (and because Python isn't my speciality), so while I do check what AI is doing before approving it, it isn't a very thorough check so I can't guarantee that there won't be any regressions or bugs I might have missed. However, as I am activelly using the app, the bugs I notice, I will of course fix. (In my personal experience, the app is much more usable and stable than the original.)
+The code is mostly done with AI assistance as it is faster than doing it by hand, (and because Python isn't my specialty), so while I do check what AI is doing before approving it, it isn't a very thorough check so I can't guarantee that there won't be any regressions or bugs I might have missed. However, as I am actively using the app, the bugs I notice, I will of course fix. (In my personal experience, the app is much more usable and stable than the original.)
 
 If I don't notice the bugs (because they are in the part of the app functionality I rarely use) feel free to report them and I might fix them. No promises though. I just wanted to share this in case anyone else needs their video dataset prep app to be more stable and feature complete.
 
@@ -11,6 +11,7 @@ I will not be upgrading/fixing the Gemini API as there are other apps that do LL
 - Fixed drawing of crop rects to actually work without causing app crashes. Crop rects can now be properly resized and moved after creation as you would expect.
 - Added **Playback Speed Controls** allowing adjustment of playback speed for both normal and range preview playback. Added shortcuts to control it (A/S/D), and reassigned existing overlapping shortcuts.
 - Playback can now **Loop**. You can toggle looping on/off via 🔁 button to the right of the playback speed controls.
+- **Caption editor in Captioning tab**: You can now view and edit the video's caption file, alleviating the need to have another app for editing captions. Since we have a nice video playback and other features, why not leverage them to enhance your reviewing and manual editing of captions as well? App automatically loads the `.txt` file that shares the same name as the selected video (e.g. `clip.mp4` → `clip.txt`). If no file exists yet, starting to type creates it. App autosaves the changes, and the area has spellchecking for English US, with the ability to temporarily whitelist words that it mistakenly thinks is misspelled. 
 - Added **"Export All Ranges as Defined"** checkbox to the export options in the left pane. This should be more useful than the other two export options, as it exports all defined ranges once - cropped if they have a crop rect defined, and uncropped if they don't. This is the new default export method
 - Session data is now sanitized to remove videos and folders that no longer exist.
 - The app now remembers the last opened folder and automatically reopens it on startup.
