@@ -360,24 +360,24 @@ class VideoEditor:
         self.current_range_end_frame = -1
 
     def next_clip(self):
-        # This should advance the main video list selection
+        """
+        Advances the video list selection to the next item.
+        Setting the current row triggers VideoCropper._on_video_selection_changed.
+        """
         current_row = self.main_app.video_list.currentRow()
-        next_row = min(self.main_app.video_list.count() - 1, current_row + 1)
-        if next_row != current_row:
-             self.main_app.video_list.setCurrentRow(next_row)
-             # load_video is automatically called by itemClicked signal, no need to call manually
-             # self.main_app.loader.load_video(self.main_app.video_list.item(next_row))
+        if current_row < self.main_app.video_list.count() - 1:
+             self.main_app.video_list.setCurrentRow(current_row + 1)
         else:
              print("Already at the last video.")
 
     def navigate_clip(self, direction):
-        # This could potentially navigate the clip range list instead?
-        # For now, keep it simple or map to prev/next video
+        """
+        Navigates the video list in the specified direction (-1: prev, 1: next).
+        """
         if direction < 0: # Previous video
              current_row = self.main_app.video_list.currentRow()
-             prev_row = max(0, current_row - 1)
-             if prev_row != current_row:
-                 self.main_app.video_list.setCurrentRow(prev_row)
+             if current_row > 0:
+                 self.main_app.video_list.setCurrentRow(current_row - 1)
              else:
                  print("Already at the first video.")
         else: # Next video

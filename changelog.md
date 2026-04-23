@@ -112,3 +112,9 @@
 - **📝 Open Caption File in Windows Explorer** right-click context-menu entry added to the video list: shown only when a caption file actually exists for the right-clicked video.
 - `scripts/caption_manager.py` [new module]: pure I/O helper with `get_caption_path`, `load_caption`, `save_caption_atomic`, `copy_caption`, and `caption_exists`.
 - `scripts/spellcheck_highlighter.py` [new module]: `QSyntaxHighlighter` subclass wrapping `pyspellchecker`.  Degrades gracefully (no-op + warning) when the library is missing.
+
+## [2026-04-23] - Bug Fix - Video Selection Shortcut (X)
+- **Unified Video Selection Logic**: Transitioned from `itemClicked` to `currentRowChanged` for the main video list. This ensures that video loading, canvas updates, and caption loading occur consistently regardless of whether the selection was changed by mouse, keyboard (Up/Down arrows), or the "X" shortcut.
+- **Fixed "X" Shortcut**: The "Next Video" shortcut (X) now correctly triggers the full video activation sequence, including autoplay and caption loading.
+- **Refactored `VideoCropper`**: Extracted video activation logic into `_activate_video_item` for cleaner internal reuse.
+- **Cleaned Up `VideoEditor`**: Removed obsolete manual loading calls in `next_clip` and `navigate_clip`, relying instead on the `currentRowChanged` signal.

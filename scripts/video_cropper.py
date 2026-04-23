@@ -119,7 +119,7 @@ class VideoCropper(QWidget):
         
         # Main video list
         left_panel.addWidget(QLabel("Video Files:"))
-        self.video_list.itemClicked.connect(self._on_video_item_clicked)
+        self.video_list.currentRowChanged.connect(self._on_video_selection_changed)
         # self.video_list.itemChanged.connect(self.loader.update_list_item_color) # Keep this
         left_panel.addWidget(self.video_list, 1) # More vertical space
 
@@ -997,13 +997,28 @@ class VideoCropper(QWidget):
             self.toggle_workflow_btn.setArrowType(Qt.ArrowType.UpArrow)
             self.workflow_container.setVisible(True)
 
+    def _on_video_selection_changed(self, row):
+        """
+        Slot connected to currentRowChanged on the video list.
+        Triggers the full activation sequence for the selected video.
+        """
+        if row < 0:
+            return
+            
+        item = self.video_list.item(row)
+        if item:
+            self._activate_video_item(item)
+
     def _on_video_item_clicked(self, item):
         """
-        Wrapper for itemClicked on the video list.
-        Delegates to the loader's load_video, then autoplays the loaded video.
+        DEPRECATED: Use _on_video_selection_changed.
+        Kept briefly for compatibility if needed, but redirects to activation logic.
+        """
+        self._activate_video_item(item)
 
-        Args:
-            item (QListWidgetItem): The list item that was clicked.
+    def _activate_video_item(self, item):
+        """
+        Core logic to load a video, start autoplay, and load its caption.
         """
         self.loader.load_video(item)
         # Autoplay after the video has loaded (frame count will be > 0 if load succeeded)
