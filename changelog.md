@@ -118,3 +118,4 @@
 - **Fixed "X" Shortcut**: The "Next Video" shortcut (X) now correctly triggers the full video activation sequence, including autoplay and caption loading.
 - **Refactored `VideoCropper`**: Extracted video activation logic into `_activate_video_item` for cleaner internal reuse.
 - **Cleaned Up `VideoEditor`**: Removed obsolete manual loading calls in `next_clip` and `navigate_clip`, relying instead on the `currentRowChanged` signal.
+- Made spell checker not flag curly (’) apostrophes as misspelled when used in words like "don't"

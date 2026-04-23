@@ -31,7 +31,7 @@ except ImportError:
 
 # Pre-compiled pattern: tokenise words (including apostrophes for contractions)
 # We match sequences of letters and apostrophes, ensuring we don't start/end with an apostrophe.
-_WORD_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)*|[A-Za-z]")
+_WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)*|[A-Za-z]")
 
 
 class SpellCheckHighlighter(QSyntaxHighlighter):
@@ -85,7 +85,7 @@ class SpellCheckHighlighter(QSyntaxHighlighter):
 
         for match in _WORD_RE.finditer(text):
             word = match.group()
-            lower_word = word.lower()
+            lower_word = word.lower().replace("’", "'")
 
             # Special handling for single-letter words. 
             # In English, only 'a' and 'i' are valid as standalone words.
@@ -106,15 +106,17 @@ class SpellCheckHighlighter(QSyntaxHighlighter):
     def get_suggestions(self, word: str):
         """Returns a list of spelling suggestions for the given word."""
         if self._spell:
-            # Strip apostrophes for checking but keep context
-            clean_word = word.strip("'")
+            # Strip apostrophes for checking but keep context. 
+            # Also normalize curly apostrophes to straight ones.
+            clean_word = word.strip("'").strip("’").replace("’", "'")
             return list(self._spell.candidates(clean_word.lower()))[:5]
         return []
 
     def is_misspelled(self, word: str) -> bool:
         """Checks if a word is misspelled."""
         if self._spell:
-            clean_word = word.strip("'")
+            # Normalize curly apostrophes to straight ones before checking
+            clean_word = word.strip("'").strip("’").replace("’", "'")
             if not clean_word: return False
             return clean_word.lower() not in self._spell
         return False
