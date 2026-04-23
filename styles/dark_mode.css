@@ -20,9 +20,9 @@ QPushButton {
     /* Subtle border */
     border-radius: 4px;
     /* Slightly smaller radius */
-    padding: 6px 10px;
+    padding: 4px 6px;
     /* Adjust padding */
-    min-height: 1.5em;
+    min-height: 1.3em;
     /* Ensure minimum height */
 }
 
@@ -93,13 +93,13 @@ QLabel {
 }
 
 QLineEdit,
-QSpinBox {
+QAbstractSpinBox {
     background-color: #3C3C3C;
     color: #E0E0E0;
     border: 1px solid #555555;
     border-radius: 4px;
     padding: 5px;
-    min-height: 1.5em;
+    min-height: 1.2em;
 }
 
 QLineEdit:read-only {
@@ -108,26 +108,51 @@ QLineEdit:read-only {
     color: #AAAAAA;
 }
 
-QSpinBox::up-button,
-QSpinBox::down-button {
-    /* Optional: Style spin box buttons if desired */
-    /* Example: make them smaller/flatter */
-    /* subcontrol-origin: border; */
-    /* width: 14px; */
-    /* border-left: 1px solid #555555; */
+QAbstractSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 18px;
     background-color: #4A4A4A;
+    border-left: 1px solid #555555;
+    border-bottom: 1px solid #555555;
+    border-top-right-radius: 4px;
 }
 
-QSpinBox::up-arrow,
-QSpinBox::down-arrow {
-    /* Optional: change arrow color/style */
-    color: #E0E0E0;
-    width: 7px;
-    height: 7px;
+QAbstractSpinBox::up-button:hover {
+    background-color: #555555;
 }
 
-QSpinBox {
-    padding-right: 20px;
+QAbstractSpinBox::up-button:pressed {
+    background-color: #606060;
+}
+
+QAbstractSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 18px;
+    background-color: #4A4A4A;
+    border-left: 1px solid #555555;
+    border-bottom-right-radius: 4px;
+}
+
+QAbstractSpinBox::down-button:hover {
+    background-color: #555555;
+}
+
+QAbstractSpinBox::down-button:pressed {
+    background-color: #606060;
+}
+
+QAbstractSpinBox::up-arrow {
+    image: url(icons/up_arrow.png);
+    width: 8px;
+    height: 8px;
+}
+
+QAbstractSpinBox::down-arrow {
+    image: url(icons/down_arrow.png);
+    width: 8px;
+    height: 8px;
 }
 
 QCheckBox {

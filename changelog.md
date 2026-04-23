@@ -96,3 +96,5 @@
 - **Delete preserves position** — deleting the currently selected video (via the Delete Video button, the Delete All Selected button, or an external file deletion detected by the folder watcher) now moves the selection to `index - 1` instead of resetting it to the top of the list.
 - **Enter key clears focus on all text inputs** — pressing Enter in any text field (Start Frame, End Frame, Duration, Crop X/Y/W/H, Go To Frame, Prefix, Trigger Word, Character Name, Gemini API Key, Custom AR Width/Height, Split Frames) now removes focus from the field so global keyboard shortcuts (`C`, `Space`, arrow keys, etc.) immediately work again without needing an extra click.
 - **New Range inherits crop** — clicking **➕ Add Range** while a range with a crop rectangle is selected now creates the new range with that same crop rect pre-applied, avoiding repetitive manual re-drawing of the same crop region for each clip.
+- Fixed `QSpinBox` and `QDoubleSpinBox` up/down buttons display in dark mode by implementing proper CSS positioning and custom triangle arrow icons.
+- Made buttons more compact.
