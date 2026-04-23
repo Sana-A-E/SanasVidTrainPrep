@@ -520,21 +520,31 @@ class VideoLoader:
 
             self.main_app.video_files.remove(entry)
 
-            # Remove from UI list
+            # Remove from UI list, remember the row so we can select a neighbour
             display_name = entry["display_name"]
+            removed_row = -1
             for i in range(self.main_app.video_list.count()):
                 item = self.main_app.video_list.item(i)
                 if item and item.text() == display_name:
+                    removed_row = i
                     self.main_app.video_list.takeItem(i)
                     break
 
-            # If this was the currently loaded video, clear the viewer
+            # If this was the currently loaded video, stop playback, release the
+            # cap handle, then select and load the nearest remaining video.
             if self.main_app.current_video_original_path == path:
                 self.main_app.current_video_original_path = None
                 self.main_app.editor.stop_playback()
                 if self.main_app.cap:
                     self.main_app.cap.release()
                     self.main_app.cap = None
+
+                # Select a neighbour (prefer the item that moved into the deleted
+                # row; fall back to the item above it).
+                if self.main_app.video_list.count() > 0:
+                    new_row = max(0, removed_row - 1)
+                    self.main_app.video_list.setCurrentRow(new_row)
+                    self.load_video(self.main_app.video_list.item(new_row))
 
             print(f"📁 Folder watcher: removed '{display_name}'")
             changed = True

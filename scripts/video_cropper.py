@@ -1,4 +1,4 @@
-import sys, os, cv2, ffmpeg, json, numpy as np, send2trash, re
+import sys, os, cv2, ffmpeg, json, numpy as np, send2trash, re, subprocess
 import uuid  # Import UUID for unique range IDs
 from scripts.custom_graphics_view import CustomGraphicsView
 from PyQt6.QtWidgets import (
@@ -116,14 +116,29 @@ class VideoCropper(QWidget):
         
         # Main video list
         left_panel.addWidget(QLabel("Video Files:"))
-        self.video_list.itemClicked.connect(self.loader.load_video) # load_video needs update
+        self.video_list.itemClicked.connect(self._on_video_item_clicked)
         # self.video_list.itemChanged.connect(self.loader.update_list_item_color) # Keep this
         left_panel.addWidget(self.video_list, 1) # More vertical space
 
+        # Right-click context menu on the video list
+        self.video_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.video_list.customContextMenuRequested.connect(self._show_video_list_context_menu)
+
+        delete_buttons_layout = QHBoxLayout()
         self.delete_video_button = QPushButton("🗑️ Delete Video")
         self.delete_video_button.setToolTip("Deletes the selected video and moves it to recycle bin.")
         self.delete_video_button.clicked.connect(self.delete_current_video)
-        left_panel.addWidget(self.delete_video_button)
+        delete_buttons_layout.addWidget(self.delete_video_button)
+
+        self.delete_all_selected_button = QPushButton("🗑️ Delete All Selected")
+        self.delete_all_selected_button.setToolTip(
+            "<b>Delete All Selected Videos</b><br>"
+            "Deletes every video whose checkbox is <b>checked</b> in the list above.<br>"
+            "Each file is moved to the Recycle Bin."
+        )
+        self.delete_all_selected_button.clicked.connect(self.delete_all_selected_videos)
+        delete_buttons_layout.addWidget(self.delete_all_selected_button)
+        left_panel.addLayout(delete_buttons_layout)
 
         # --- Clip Range Management Panel ---
         range_group_box = QWidget() # Use a QWidget for layout within the panel
@@ -141,18 +156,21 @@ class VideoCropper(QWidget):
         self.start_frame_input = QLineEdit("0")
         self.start_frame_input.setValidator(QIntValidator(0, 9999999))
         self.start_frame_input.editingFinished.connect(self.update_start_frame_input)
+        self.start_frame_input.returnPressed.connect(self.start_frame_input.clearFocus)
         range_input_layout.addWidget(self.start_frame_input)
 
         range_input_layout.addWidget(QLabel("End Frame:"))
         self.end_frame_input = QLineEdit("60")
         self.end_frame_input.setValidator(QIntValidator(1, 9999999))
         self.end_frame_input.editingFinished.connect(self.update_end_frame_input)
+        self.end_frame_input.returnPressed.connect(self.end_frame_input.clearFocus)
         range_input_layout.addWidget(self.end_frame_input)
 
         range_input_layout.addWidget(QLabel("Duration (f):"))
         self.duration_input = QLineEdit("60")
         self.duration_input.setValidator(QIntValidator(1, 99999))
         self.duration_input.editingFinished.connect(self.update_range_duration_from_input)
+        self.duration_input.returnPressed.connect(self.duration_input.clearFocus)
         range_input_layout.addWidget(self.duration_input)
         range_layout.addLayout(range_input_layout)
 
@@ -325,11 +343,13 @@ class VideoCropper(QWidget):
         self.fixed_width_input = QLineEdit()
         self.fixed_width_input.setPlaceholderText("Width")
         self.fixed_width_input.setValidator(QIntValidator(1, 7680, self))
+        self.fixed_width_input.returnPressed.connect(self.fixed_width_input.clearFocus)
         fixed_res_inputs_layout.addWidget(self.fixed_width_input)
         fixed_res_inputs_layout.addWidget(QLabel("x"))
         self.fixed_height_input = QLineEdit()
         self.fixed_height_input.setPlaceholderText("Height")
         self.fixed_height_input.setValidator(QIntValidator(1, 7680, self))
+        self.fixed_height_input.returnPressed.connect(self.fixed_height_input.clearFocus)
         fixed_res_inputs_layout.addWidget(self.fixed_height_input)
 
         self.apply_fixed_res_button = QPushButton("✔️ Apply")
@@ -390,11 +410,15 @@ class VideoCropper(QWidget):
         crop_action_row.addWidget(self.clear_crop_button)
         current_crop_layout.addRow(crop_action_row)
         
-        # Connect enter key on inputs
+        # Connect enter key on inputs — apply crop then clear focus so global shortcuts work
         self.crop_x_input.returnPressed.connect(self.apply_manual_crop)
         self.crop_y_input.returnPressed.connect(self.apply_manual_crop)
         self.crop_w_input.returnPressed.connect(self.apply_manual_crop)
         self.crop_h_input.returnPressed.connect(self.apply_manual_crop)
+        self.crop_x_input.returnPressed.connect(self.crop_x_input.clearFocus)
+        self.crop_y_input.returnPressed.connect(self.crop_y_input.clearFocus)
+        self.crop_w_input.returnPressed.connect(self.crop_w_input.clearFocus)
+        self.crop_h_input.returnPressed.connect(self.crop_h_input.clearFocus)
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setEnabled(False)
@@ -427,10 +451,10 @@ class VideoCropper(QWidget):
 
         self.loop_button = QPushButton("🔁")
         self.loop_button.setCheckable(True)
-        self.loop_button.setChecked(False)
+        self.loop_button.setChecked(True)
         self.loop_button.setFixedSize(24, 24)
         self.loop_button.clicked.connect(self.toggle_loop)
-        self._update_loop_button_style()
+        self.toggle_loop()
         clip_length_layout.addWidget(self.loop_button)
         
         right_panel.addLayout(clip_length_layout)
@@ -491,6 +515,7 @@ class VideoCropper(QWidget):
         self.goto_frame_input.setValidator(QIntValidator(0, 9999999))
         self.goto_frame_input.setToolTip("Enter frame number and press Enter")
         self.goto_frame_input.returnPressed.connect(self._goto_frame)
+        self.goto_frame_input.returnPressed.connect(self.goto_frame_input.clearFocus)
         frame_control_layout.addWidget(self.goto_frame_input)
 
         right_panel.addLayout(frame_control_layout)
@@ -503,19 +528,23 @@ class VideoCropper(QWidget):
         self.prefix_input = QLineEdit()
         self.prefix_input.setPlaceholderText("Replace original name (Optional)")
         self.prefix_input.textChanged.connect(lambda text: setattr(self, "export_prefix", text))
+        self.prefix_input.returnPressed.connect(self.prefix_input.clearFocus)
         gemini_options_layout.addRow("Filename Prefix:", self.prefix_input)
 
         self.trigger_word_input = QLineEdit()
         self.trigger_word_input.setPlaceholderText("Prepend to captions (Optional)")
+        self.trigger_word_input.returnPressed.connect(self.trigger_word_input.clearFocus)
         gemini_options_layout.addRow("Trigger Word:", self.trigger_word_input)
 
         self.character_name_input = QLineEdit()
         self.character_name_input.setPlaceholderText("Subject name for Gemini (Optional)")
+        self.character_name_input.returnPressed.connect(self.character_name_input.clearFocus)
         gemini_options_layout.addRow("Character Name:", self.character_name_input)
         
         self.gemini_api_key_input = QLineEdit()
         self.gemini_api_key_input.setPlaceholderText("Enter Gemini API Key Here")
         self.gemini_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.gemini_api_key_input.returnPressed.connect(self.gemini_api_key_input.clearFocus)
         gemini_options_layout.addRow("Gemini API Key:", self.gemini_api_key_input)
         
         self.gemini_caption_checkbox = QCheckBox("Generate Gemini Caption/Description")
@@ -667,6 +696,7 @@ class VideoCropper(QWidget):
             "&nbsp;&nbsp;\u2022 <i>_part02</i> \u2014 frames 150 \u2013 399<br>"
             "&nbsp;&nbsp;\u2022 <i>_part03</i> \u2014 frames 400 \u2013 end"
         )
+        self.split_frames_input.returnPressed.connect(self.split_frames_input.clearFocus)
         split_controls_layout.addWidget(self.split_frames_input, 1)
 
         self.split_button = QPushButton("\u2702\ufe0f Split")
@@ -899,9 +929,139 @@ class VideoCropper(QWidget):
             self.toggle_workflow_btn.setArrowType(Qt.ArrowType.UpArrow)
             self.workflow_container.setVisible(True)
 
+    def _on_video_item_clicked(self, item):
+        """
+        Wrapper for itemClicked on the video list.
+        Delegates to the loader's load_video, then autoplays the loaded video.
+
+        Args:
+            item (QListWidgetItem): The list item that was clicked.
+        """
+        self.loader.load_video(item)
+        # Autoplay after the video has loaded (frame count will be > 0 if load succeeded)
+        if self.frame_count > 0 and self.slider.isEnabled():
+            self.editor.toggle_play_forward()
+
+    def _show_video_list_context_menu(self, pos):
+        """
+        Shows a right-click context menu for the video list with:
+        - <b>Copy Path</b>: copies the absolute file path to the clipboard.
+        - <b>Open in Windows Explorer</b>: opens the video's folder and selects the file.
+
+        Args:
+            pos (QPoint): The cursor position within the video list widget (local coords).
+        """
+        from PyQt6.QtWidgets import QMenu
+        item = self.video_list.itemAt(pos)
+        if not item:
+            return  # No item under cursor — nothing to show
+
+        idx = self.video_list.row(item)
+        if idx < 0 or idx >= len(self.video_files):
+            return
+
+        video_path = self.video_files[idx].get("original_path", "")
+        if not video_path:
+            return
+
+        menu = QMenu(self)
+        menu.setMinimumWidth(220)
+
+        copy_action = menu.addAction("📋 Copy Path")
+        copy_action.setToolTip("Copy the absolute file path to the clipboard")
+
+        explorer_action = menu.addAction("📂 Open in Windows Explorer")
+        explorer_action.setToolTip("Open the containing folder and select this file")
+
+        action = menu.exec(self.video_list.mapToGlobal(pos))
+
+        if action == copy_action:
+            QApplication.clipboard().setText(video_path)
+            print(f"Copied to clipboard: {video_path}")
+        elif action == explorer_action:
+            # /select, highlights the specific file inside Explorer
+            subprocess.Popen(['explorer', '/select,', os.path.normpath(video_path)])
+
+    def delete_all_selected_videos(self):
+        """
+        Deletes every video in the list whose checkbox is checked (Export Selected).
+        Each file is moved to the Recycle Bin.  After deletion the selection moves
+        to the item just before the first deleted item, mirroring the behaviour of
+        the single-video delete.
+        """
+        # Collect (row, path) pairs for checked items, sorted descending by row
+        # so we can remove from the list widget bottom-up without index drift.
+        targets = []
+        for i in range(self.video_list.count()):
+            item = self.video_list.item(i)
+            if item and item.checkState() == Qt.CheckState.Checked:
+                if i < len(self.video_files):
+                    targets.append((i, self.video_files[i]["original_path"]))
+
+        if not targets:
+            QMessageBox.information(self, "Nothing to Delete",
+                                    "No videos are checked. Tick the checkboxes next to the "
+                                    "videos you want to delete first.")
+            return
+
+        # Remember the lowest row so we can land just above it afterwards
+        first_deleted_row = targets[0][0]
+
+        # Stop playback / release cap if the current video is among those being deleted
+        current_paths = {os.path.normpath(p) for _, p in targets}
+        if self.current_video_original_path and \
+                os.path.normpath(self.current_video_original_path) in current_paths:
+            self.editor.stop_playback()
+            if self.cap:
+                self.cap.release()
+                self.cap = None
+            self.current_video_original_path = None
+
+        errors = []
+        deleted_paths = set()
+
+        # Delete bottom-up to keep row indices valid
+        for row, path in sorted(targets, key=lambda t: t[0], reverse=True):
+            try:
+                send2trash.send2trash(path)
+                deleted_paths.add(os.path.normpath(path))
+                self.video_list.takeItem(row)
+            except Exception as exc:
+                errors.append(f"{os.path.basename(path)}: {exc}")
+
+        # Clean up in-memory state
+        self.video_files = [
+            v for v in self.video_files
+            if os.path.normpath(v["original_path"]) not in deleted_paths
+        ]
+        for p in list(self.video_data.keys()):
+            if os.path.normpath(p) in deleted_paths:
+                del self.video_data[p]
+
+        if errors:
+            QMessageBox.warning(self, "Partial Deletion",
+                                "Some files could not be deleted:\n" + "\n".join(errors))
+
+        # Select a neighbour and load it, or clear the viewer if the list is now empty
+        if self.video_list.count() > 0:
+            new_row = max(0, first_deleted_row - 1)
+            self.video_list.setCurrentRow(new_row)
+            self.loader.load_video(self.video_list.item(new_row))
+        else:
+            self.pixmap_item.setPixmap(QPixmap())
+            self.clear_crop_region_controller()
+            self.graphics_view.update()
+            self.slider.setEnabled(False)
+            self.slider.setValue(0)
+            self.start_frame_input.setText("0")
+            self.end_frame_input.setText("0")
+            self.duration_input.setText("0")
+
+        self.loader.save_session()
+
     def delete_current_video(self):
         if not self.current_video_original_path: return
-        
+
         try:
             # Stop active playback and release the video handle to prevent
             # WinError 32 (file in use by another process) on deletion.
@@ -925,9 +1085,11 @@ class VideoCropper(QWidget):
 
             self.current_video_original_path = None
             
-            # Check next item and load it
+            # Select the item just before the deleted one (index - 1), not always 0
             if self.video_list.count() > 0:
-                self.video_list.setCurrentRow(0)
+                new_row = max(0, row - 1)
+                self.video_list.setCurrentRow(new_row)
+                self.loader.load_video(self.video_list.item(new_row))
             else:
                 self.pixmap_item.setPixmap(QPixmap())
                 self.clear_crop_region_controller()
@@ -1312,7 +1474,9 @@ class VideoCropper(QWidget):
                   end_frame = min(start_frame + 1, self.frame_count)
                   if start_frame >= end_frame:
                       start_frame = max(0, end_frame - 1)
-             crop_tuple = None # No crop by default if using button
+             # Copy crop rect from the previously selected range if it has one
+             prev_range = self.find_range_by_id(self.current_selected_range_id)
+             crop_tuple = prev_range.get("crop") if prev_range else None
         else:
              # Use provided values (from crop_rect_finalized)
              start_frame = start

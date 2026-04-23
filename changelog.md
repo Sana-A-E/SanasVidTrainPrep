@@ -69,7 +69,7 @@
   - When **Loop is OFF** (default), playback stops as before.
   - The button changes colour (blue highlight = ON, muted = OFF) and its tooltip dynamically describes the current state and what clicking will do.
 
-  ## [2026-04-23]
+## [2026-04-23]
 ### Added Features
 - **Video Editing Tab**: A new dedicated **"Video Editing"** tab has been added to the right-panel tab widget, providing non-destructive tools for rearranging video footage without opening an external editor.
 - **Trim Section** (Video Editing tab):
@@ -84,3 +84,15 @@
 - **Folder Monitoring** (`VideoLoader`): a `QFileSystemWatcher` now monitors the currently open folder for filesystem changes. When a video file is added externally (e.g. copied into the folder), it automatically appears in the video list. When a video file is deleted externally it is automatically removed. No extra dependency — `QFileSystemWatcher` ships with PyQt6.
 - **`scripts/video_file_operator.py`** [new module]: encapsulates all trim and split ffmpeg logic in a clean, reusable, stateless class (`VideoFileOperator`). Uses ffmpeg-python with the `-nostdin` flag (consistent with the rest of the app). Temporary files are used for in-place overwrites to prevent data loss on failure.
 - All new widgets include descriptive rich-text tooltips.
+- **Delete All Selected Videos** button added next to **Delete Video**. Deletes every video whose checkbox is checked in the video list and moves each to the Recycle Bin. After mass deletion the selection lands on the item just before the first deleted entry.
+- **Right-click context menu** on video list entries:
+  - **📋 Copy Path** — copies the full absolute file path (including filename and extension) to the clipboard.
+  - **📂 Open in Windows Explorer** — opens the video's parent folder in Windows Explorer with the file pre-selected.
+
+### UX Improvements
+- Loop is now on by default
+- **Compact video list** — row height reduced by tightening the item padding in `dark_mode.css`, allowing more videos to be visible at once without scrolling.
+- **Autoplay on selection** — clicking a video in the list now automatically starts playback immediately after the video loads.
+- **Delete preserves position** — deleting the currently selected video (via the Delete Video button, the Delete All Selected button, or an external file deletion detected by the folder watcher) now moves the selection to `index - 1` instead of resetting it to the top of the list.
+- **Enter key clears focus on all text inputs** — pressing Enter in any text field (Start Frame, End Frame, Duration, Crop X/Y/W/H, Go To Frame, Prefix, Trigger Word, Character Name, Gemini API Key, Custom AR Width/Height, Split Frames) now removes focus from the field so global keyboard shortcuts (`C`, `Space`, arrow keys, etc.) immediately work again without needing an extra click.
+- **New Range inherits crop** — clicking **➕ Add Range** while a range with a crop rectangle is selected now creates the new range with that same crop rect pre-applied, avoiding repetitive manual re-drawing of the same crop region for each clip.
