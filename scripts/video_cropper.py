@@ -1,11 +1,11 @@
-import sys, os, cv2, ffmpeg, json, numpy as np, send2trash
-import uuid # Import UUID for unique range IDs
+import sys, os, cv2, ffmpeg, json, numpy as np, send2trash, re
+import uuid  # Import UUID for unique range IDs
 from scripts.custom_graphics_view import CustomGraphicsView
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QFileDialog, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QListWidget, QSlider, QGraphicsPixmapItem, QLineEdit, QSpinBox, QDoubleSpinBox,
     QSizePolicy, QCheckBox, QListWidgetItem, QComboBox, QMessageBox, QDialog, QFormLayout, QDialogButtonBox,
-    QSpacerItem, QTabWidget, QToolButton # Added QToolButton
+    QSpacerItem, QTabWidget, QToolButton,
 )
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QIcon, QMouseEvent, QIntValidator, QKeySequence, QShortcut
 from PyQt6.QtCore import Qt, QTimer, QRectF
@@ -17,6 +17,7 @@ from scripts.custom_graphics_scene import CustomGraphicsScene
 from scripts.video_loader import VideoLoader
 from scripts.video_editor import VideoEditor
 from scripts.video_exporter import VideoExporter
+from scripts.video_file_operator import VideoFileOperator
 
 class VideoCropper(QWidget):
     def __init__(self):
@@ -413,7 +414,7 @@ class VideoCropper(QWidget):
         self.playback_speed_spinner.setSingleStep(0.25)
         self.playback_speed_spinner.setValue(1.0)
         self.playback_speed_spinner.setFixedWidth(90)
-        self.playback_speed_spinner.setStyleSheet("padding-right: 20px;") # Ensure space for buttons
+        #self.playback_speed_spinner.setStyleSheet("padding-right: 20px;") # Ensure space for buttons
         self.playback_speed_spinner.valueChanged.connect(self.update_playback_speed)
         clip_length_layout.addWidget(self.playback_speed_spinner)
         
@@ -495,31 +496,31 @@ class VideoCropper(QWidget):
         right_panel.addLayout(frame_control_layout)
 
         # --- Reorganized Export Settings & Gemini Inputs (Vertical) into a Widget ---
-        export_options_group = QWidget()
-        export_options_layout = QFormLayout(export_options_group)
-        export_options_layout.setContentsMargins(0, 10, 0, 5)
+        gemini_options_group = QWidget()
+        gemini_options_layout = QFormLayout(gemini_options_group)
+        gemini_options_layout.setContentsMargins(0, 10, 0, 5)
 
         self.prefix_input = QLineEdit()
         self.prefix_input.setPlaceholderText("Replace original name (Optional)")
         self.prefix_input.textChanged.connect(lambda text: setattr(self, "export_prefix", text))
-        export_options_layout.addRow("Filename Prefix:", self.prefix_input)
+        gemini_options_layout.addRow("Filename Prefix:", self.prefix_input)
 
         self.trigger_word_input = QLineEdit()
         self.trigger_word_input.setPlaceholderText("Prepend to captions (Optional)")
-        export_options_layout.addRow("Trigger Word:", self.trigger_word_input)
+        gemini_options_layout.addRow("Trigger Word:", self.trigger_word_input)
 
         self.character_name_input = QLineEdit()
         self.character_name_input.setPlaceholderText("Subject name for Gemini (Optional)")
-        export_options_layout.addRow("Character Name:", self.character_name_input)
+        gemini_options_layout.addRow("Character Name:", self.character_name_input)
         
         self.gemini_api_key_input = QLineEdit()
         self.gemini_api_key_input.setPlaceholderText("Enter Gemini API Key Here")
         self.gemini_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        export_options_layout.addRow("Gemini API Key:", self.gemini_api_key_input)
+        gemini_options_layout.addRow("Gemini API Key:", self.gemini_api_key_input)
         
         self.gemini_caption_checkbox = QCheckBox("Generate Gemini Caption/Description")
         self.gemini_caption_checkbox.setChecked(False)
-        export_options_layout.addRow("", self.gemini_caption_checkbox)
+        gemini_options_layout.addRow("", self.gemini_caption_checkbox)
 
         # Tabs Layout
         self.tabs = QTabWidget()
@@ -547,12 +548,153 @@ class VideoCropper(QWidget):
         crop_layout.addStretch(1)
         self.tabs.addTab(crop_tab, "Crop")
         
-        # Tab 2: Captioning
+        # ── Tab 2: Video Editing ─────────────────────────────────────────────
+        video_editing_tab = QWidget()
+        video_editing_layout = QVBoxLayout(video_editing_tab)
+        video_editing_layout.setContentsMargins(8, 8, 8, 8)
+        video_editing_layout.setSpacing(6)
+
+        # ── TRIM SECTION ──────────────────────────────────────────────────
+        trim_header_layout = QHBoxLayout()
+        trim_section_label = QLabel("<b>── Trim ──</b>")
+        trim_section_label.setToolTip(
+            "<b>Trim Section</b><br>"
+            "Remove frames from the very beginning or the very end of the "
+            "currently selected video.<br><br>"
+            "<i>Trim Start</i>: discards everything <b>before</b> the chosen frame.<br>"
+            "<i>Trim End</i>: discards everything <b>after</b> the chosen frame."
+        )
+        trim_header_layout.addWidget(trim_section_label)
+        trim_header_layout.addStretch()
+
+        self.trim_overwrite_checkbox = QCheckBox("Overwrite current video")
+        self.trim_overwrite_checkbox.setChecked(True)
+        self.trim_overwrite_checkbox.setToolTip(
+            "<b>Overwrite current video</b><br>"
+            "When <b>checked</b>: the original file is replaced with the trimmed "
+            "version. The video is reloaded automatically afterwards.<br>"
+            "When <b>unchecked</b>: a new file is created next to the original with "
+            "a <i>_trimmed</i> suffix and added to the video list."
+        )
+        trim_header_layout.addWidget(self.trim_overwrite_checkbox)
+        video_editing_layout.addLayout(trim_header_layout)
+
+        trim_controls_layout = QHBoxLayout()
+        self.trim_mode_combo = QComboBox()
+        self.trim_mode_combo.addItems(["Trim Start", "Trim End"])
+        self.trim_mode_combo.setToolTip(
+            "<b>Trim Mode</b><br>"
+            "<b>Trim Start</b>: removes all frames <b>before</b> the frame entered "
+            "in the spinner. The chosen frame becomes the new first frame.<br>"
+            "<b>Trim End</b>: removes all frames <b>after</b> the frame entered in "
+            "the spinner. The chosen frame becomes the new last frame."
+        )
+        trim_controls_layout.addWidget(self.trim_mode_combo)
+
+        trim_frame_label = QLabel("First/Last Good Frame:")
+        trim_frame_label.setToolTip(
+            "<b>Boundary Frame</b><br>"
+            "For <i>Trim Start</i>: the <b>first good frame</b> \u2014 all frames "
+            "<b>before</b> this number are removed.<br>"
+            "For <i>Trim End</i>: the <b>last good frame</b> \u2014 all frames "
+            "<b>after</b> this number are removed.<br><br>"
+            "Range: 0 \u2013 (total frames \u2212 1)."
+        )
+        trim_frame_label.setFixedWidth(150)
+        trim_frame_label.setStyleSheet("padding-left: 10px;")
+        trim_controls_layout.addWidget(trim_frame_label)
+        
+        self.trim_frame_spinner = QSpinBox()
+        self.trim_frame_spinner.setMinimum(0)
+        self.trim_frame_spinner.setMaximum(0)   # Updated when a video is loaded
+        self.trim_frame_spinner.setSingleStep(1)
+        self.trim_frame_spinner.setToolTip(
+            "<b>Boundary Frame</b><br>"
+            "For <i>Trim Start</i>: the <b>first good frame</b> \u2014 all frames "
+            "<b>before</b> this number are removed.<br>"
+            "For <i>Trim End</i>: the <b>last good frame</b> \u2014 all frames "
+            "<b>after</b> this number are removed.<br><br>"
+            "Range: 0 \u2013 (total frames \u2212 1)."
+        )
+        trim_controls_layout.addWidget(self.trim_frame_spinner)
+
+        self.trim_button = QPushButton("\u2702\ufe0f Trim")
+        self.trim_button.setToolTip(
+            "<b>Trim</b><br>"
+            "Executes the trim operation using ffmpeg (stream-copy \u2014 no re-encode).<br>"
+            "Result depends on the <i>Overwrite current video</i> checkbox above."
+        )
+        self.trim_button.clicked.connect(self._on_trim_clicked)
+        trim_controls_layout.addWidget(self.trim_button)
+        video_editing_layout.addLayout(trim_controls_layout)
+
+        # ── SPLIT SECTION ─────────────────────────────────────────────────
+        split_header_layout = QHBoxLayout()
+        split_section_label = QLabel("<b>── Split Video ──</b>")
+        split_section_label.setToolTip(
+            "<b>Split Video Section</b><br>"
+            "Divides the current video into multiple consecutive parts at the "
+            "frame numbers you specify. Each part is saved as a separate file "
+            "(e.g. <i>_part01</i>, <i>_part02</i>, \u2026)."
+        )
+        split_header_layout.addWidget(split_section_label)
+        split_header_layout.addStretch()
+
+        self.split_delete_original_checkbox = QCheckBox("Delete original video")
+        self.split_delete_original_checkbox.setChecked(True)
+        self.split_delete_original_checkbox.setToolTip(
+            "<b>Delete original video</b><br>"
+            "When <b>checked</b>: the original file is moved to the Recycle Bin "
+            "after all parts are successfully exported.<br>"
+            "When <b>unchecked</b>: the original file is kept alongside the parts."
+        )
+        split_header_layout.addWidget(self.split_delete_original_checkbox)
+        video_editing_layout.addLayout(split_header_layout)
+
+        split_controls_layout = QHBoxLayout()
+        self.split_frames_input = QLineEdit()
+        self.split_frames_input.setPlaceholderText(
+            "First frames of each part, e.g.: 0, 150, 400  or  0 150 400"
+        )
+        self.split_frames_input.setToolTip(
+            "<b>Split Frame Numbers</b><br>"
+            "Enter the <b>first frame</b> of each output part, separated by "
+            "commas or spaces.<br>"
+            "Frame 0 is always the start of the first part (added automatically "
+            "if omitted).<br><br>"
+            "<b>Example:</b> entering <code>150 400</code> produces three parts:<br>"
+            "&nbsp;&nbsp;\u2022 <i>_part01</i> \u2014 frames 0 \u2013 149<br>"
+            "&nbsp;&nbsp;\u2022 <i>_part02</i> \u2014 frames 150 \u2013 399<br>"
+            "&nbsp;&nbsp;\u2022 <i>_part03</i> \u2014 frames 400 \u2013 end"
+        )
+        split_controls_layout.addWidget(self.split_frames_input, 1)
+
+        self.split_button = QPushButton("\u2702\ufe0f Split")
+        self.split_button.setToolTip(
+            "<b>Split</b><br>"
+            "Parses the frame numbers above and writes each part using ffmpeg "
+            "(stream-copy \u2014 no re-encode).<br>"
+            "Parts are added to the video list automatically."
+        )
+        self.split_button.clicked.connect(self._on_split_clicked)
+        split_controls_layout.addWidget(self.split_button)
+        video_editing_layout.addLayout(split_controls_layout)
+
+        video_editing_layout.addStretch(1)
+        self.tabs.addTab(video_editing_tab, "Video Editing")
+
+        # Tab 3: 
         caption_tab = QWidget()
         caption_layout = QVBoxLayout(caption_tab)
-        caption_layout.addWidget(export_options_group)
         caption_layout.addStretch(1)
         self.tabs.addTab(caption_tab, "Captioning")
+
+        # Tab 4: Gemini Captioning
+        gemini_caption_tab = QWidget()
+        gemini_caption_layout = QVBoxLayout(gemini_caption_tab)
+        gemini_caption_layout.addWidget(gemini_options_group)
+        gemini_caption_layout.addStretch(1)
+        self.tabs.addTab(gemini_caption_tab, "Gemini Captioning")
         
         right_panel.addWidget(self.tabs)
 
@@ -1510,7 +1652,233 @@ class VideoCropper(QWidget):
             self.fixed_res_status_label.setText("Custom AR: Deactivated")
             print("Custom AR mode disabled.")
 
+    # ------------------------------------------------------------------
+    # Video Editing tab — Trim & Split slots
+    # ------------------------------------------------------------------
+
+    def _on_trim_clicked(self):
+        """
+        Handles the Trim button press in the Video Editing tab.
+
+        Reads the trim mode and boundary frame from the UI, delegates the
+        actual ffmpeg work to ``VideoFileOperator.trim_video``, then either
+        reloads the overwritten video in-place or adds the new ``_trimmed``
+        file to the video list, depending on the checkbox state.
+        """
+        if not self.current_video_original_path:
+            QMessageBox.warning(self, "No Video", "Please select a video first.")
+            return
+
+        mode_text = self.trim_mode_combo.currentText()
+        mode = "start" if mode_text == "Trim Start" else "end"
+        frame = self.trim_frame_spinner.value()
+        fps = self.editor.current_fps
+        overwrite = self.trim_overwrite_checkbox.isChecked()
+
+        if fps <= 0:
+            QMessageBox.warning(self, "No FPS Data",
+                                "Could not determine video FPS. Reload the video and try again.")
+            return
+
+        # Guard against trivial / no-op trims
+        if mode == "start" and frame == 0:
+            QMessageBox.information(self, "Nothing to Trim",
+                                    "Frame 0 is already the first frame — nothing to remove.")
+            return
+        if mode == "end" and frame >= self.frame_count - 1:
+            QMessageBox.information(self, "Nothing to Trim",
+                                    "The chosen frame is already the last frame — nothing to remove.")
+            return
+
+        input_path = self.current_video_original_path
+
+        # Release the file handle before overwriting so ffmpeg can write to the
+        # same path (mirrors the pattern used in delete_current_video).
+        if overwrite:
+            self.editor.stop_playback()
+            if self.cap:
+                self.cap.release()
+                self.cap = None
+
+        print(f"Trimming '{os.path.basename(input_path)}' — mode={mode}, "
+              f"frame={frame}, overwrite={overwrite}")
+
+        success, output_paths, error = VideoFileOperator.trim_video(
+            input_path, mode, frame, fps, overwrite
+        )
+
+        if not success:
+            QMessageBox.critical(self, "Trim Failed",
+                                 f"Could not trim video:\n\n{error}")
+            if overwrite:
+                # Attempt to restore the video capture so the app stays usable
+                self.editor.load_video_properties(input_path)
+            return
+
+        if overwrite:
+            # Reload the now-trimmed video, resetting ranges (they are stale)
+            self._reload_video(input_path)
+            QMessageBox.information(self, "Trim Complete",
+                                    "Video trimmed and saved successfully.")
+        else:
+            for out_path in output_paths:
+                self._add_video_to_list(out_path)
+            names = "\n".join(os.path.basename(p) for p in output_paths)
+            QMessageBox.information(self, "Trim Complete",
+                                    f"Trimmed video saved as:\n{names}")
+
+    def _on_split_clicked(self):
+        """
+        Handles the Split button press in the Video Editing tab.
+
+        Parses the comma/space-separated frame numbers from the input field,
+        delegates splitting to ``VideoFileOperator.split_video``, and adds
+        each resulting part to the video list.  If "Delete original video" is
+        checked and the split succeeds, the original is moved to the Recycle Bin
+        and removed from the list.
+        """
+        if not self.current_video_original_path:
+            QMessageBox.warning(self, "No Video", "Please select a video first.")
+            return
+
+        raw_text = self.split_frames_input.text().strip()
+        if not raw_text:
+            QMessageBox.warning(self, "No Frames",
+                                "Please enter at least one split frame number.")
+            return
+
+        # Parse: split on any combination of commas and whitespace
+        tokens = re.split(r'[\s,]+', raw_text)
+        try:
+            split_frames = [int(t) for t in tokens if t]
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input",
+                                "All split frame numbers must be integers.")
+            return
+
+        if not split_frames:
+            QMessageBox.warning(self, "No Valid Frames",
+                                "No valid frame numbers were found in the input.")
+            return
+
+        fps = self.editor.current_fps
+        if fps <= 0:
+            QMessageBox.warning(self, "No FPS Data",
+                                "Could not determine video FPS. Reload the video and try again.")
+            return
+
+        delete_original = self.split_delete_original_checkbox.isChecked()
+        input_path = self.current_video_original_path
+
+        # Release the file handle so ffmpeg can read the file freely and,
+        # if delete_original is set, send2trash can remove it afterwards.
+        self.editor.stop_playback()
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+
+        print(f"Splitting '{os.path.basename(input_path)}' at frames {split_frames}, "
+              f"delete_original={delete_original}")
+
+        success, output_paths, error = VideoFileOperator.split_video(
+            input_path, split_frames, fps, delete_original
+        )
+
+        # Add successfully written parts to the video list regardless of errors
+        for out_path in output_paths:
+            self._add_video_to_list(out_path)
+
+        if not success:
+            QMessageBox.critical(self, "Split Failed",
+                                 f"Split encountered errors:\n\n{error}")
+            # Restore video capture so the app stays usable
+            if os.path.isfile(input_path):
+                self.editor.load_video_properties(input_path)
+            return
+
+        # Remove the original from the app state if it was deleted
+        if delete_original and not os.path.isfile(input_path):
+            # Remove from video_files list
+            self.video_files = [
+                v for v in self.video_files
+                if os.path.normpath(v["original_path"]) != os.path.normpath(input_path)
+            ]
+            # Remove from UI list
+            for i in range(self.video_list.count()):
+                item = self.video_list.item(i)
+                if item and item.text() == os.path.basename(input_path):
+                    self.video_list.takeItem(i)
+                    break
+            # Remove stale video_data entry
+            if input_path in self.video_data:
+                del self.video_data[input_path]
+            self.current_video_original_path = None
+
+        if error:
+            # Partial success — some parts wrote but delete failed (non-fatal)
+            QMessageBox.warning(self, "Split Warning", error)
+        else:
+            names = "\n".join(os.path.basename(p) for p in output_paths)
+            QMessageBox.information(self, "Split Complete",
+                                    f"Video split into {len(output_paths)} parts:\n{names}")
+
+        self.loader.save_session()
+
+    def _reload_video(self, path: str) -> None:
+        """
+        Reloads a video file into the player after an in-place edit (e.g. trim
+        overwrite).  Resets the slider, frame label, and clip range list because
+        the original ranges are no longer valid for the modified file.
+
+        Args:
+            path (str): Absolute path of the video to reload (same as before edit).
+        """
+        success = self.editor.load_video_properties(path)
+        if not success:
+            print(f"⚠️ Could not reload video after edit: {path}")
+            return
+
+        # Update trim spinner max for the newly trimmed file
+        self.trim_frame_spinner.setMaximum(max(0, self.frame_count - 1))
+        self.trim_frame_spinner.setValue(0)
+
+        # Reset ranges — existing range boundaries are invalid after trimming
+        if path in self.video_data:
+            self.video_data[path] = {"ranges": []}
+        self.clip_range_list.clear()
+        self.current_selected_range_id = None
+        self.add_new_range()
+
+        self.loader.save_session()
+
+    def _add_video_to_list(self, video_path: str) -> None:
+        """
+        Adds a newly created video file to ``video_files`` and the UI list widget
+        if it is not already present.  Called after trim (no overwrite) and split
+        operations to make the new files immediately accessible.
+
+        Args:
+            video_path (str): Absolute path to the video file to add.
+        """
+        norm_path = os.path.normpath(video_path)
+        # Idempotent: skip if already tracked
+        if any(os.path.normpath(v["original_path"]) == norm_path
+               for v in self.video_files):
+            return
+
+        filename = os.path.basename(norm_path)
+        new_entry = {
+            "original_path": norm_path,
+            "display_name": filename,
+            "copy_number": 0,
+            "export_enabled": False,
+        }
+        self.video_files.append(new_entry)
+        self.loader.add_video_item(filename)
+        print(f"✅ Added to video list: {filename}")
+
     def trigger_export_range_start_frames(self):
+
         """
         Triggers the export of the first frame of each range for the selected videos.
         """

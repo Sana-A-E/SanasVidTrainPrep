@@ -1,29 +1,55 @@
 import os, json
 from PyQt6.QtWidgets import QFileDialog, QListWidgetItem, QMessageBox
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QFileSystemWatcher
 from PyQt6.QtGui import QColor  # Added import for QColor
 import ffmpeg # Import ffmpeg-python
+
+# Supported video extensions (lower-case) used consistently throughout the class
+_VIDEO_EXTENSIONS = ('.mp4', '.avi', '.mov')
 
 class VideoLoader:
     def __init__(self, main_app):
         self.main_app = main_app
         self.session_file = "session_data.json"
 
+        # Folder watcher — fires a callback whenever files are added/removed
+        # inside the currently open folder so the video list stays in sync.
+        self._folder_watcher = QFileSystemWatcher()
+        self._folder_watcher.directoryChanged.connect(self._on_folder_changed)
+
     def load_folder(self, folder_path=None):
+        """
+        Opens a folder selection dialog (or uses the given path), stores it as
+        the active folder, starts the file-system watcher, and loads the list.
+
+        Args:
+            folder_path (str | None): Pre-selected folder path; prompts via
+                dialog when ``None``.
+        """
         if folder_path:
             folder = folder_path
         else:
             folder = QFileDialog.getExistingDirectory(self.main_app, "Select Folder")
-            
+
         if folder:
             folder = os.path.normpath(folder)
             self.main_app.folder_path = folder
+
+            # Restart watcher on the new folder
+            if self._folder_watcher.directories():
+                self._folder_watcher.removePaths(self._folder_watcher.directories())
+            self._folder_watcher.addPath(folder)
+
             # Always load contents to ensure newly added videos are detected
             self.load_folder_contents()
 
     def load_folder_contents(self):
-        files = [f for f in os.listdir(self.main_app.folder_path) 
-                if f.lower().endswith(('.mp4', '.avi', '.mov'))]
+        """
+        Scans the active folder for video files and rebuilds ``video_files``
+        and the UI list widget, merging any previously saved session state.
+        """
+        files = [f for f in os.listdir(self.main_app.folder_path)
+                 if f.lower().endswith(_VIDEO_EXTENSIONS)]
         
         # Use saved session data for this folder if available.
         previous_videos = {}
@@ -132,7 +158,14 @@ class VideoLoader:
              return
         else:
              # Update total length label now that frame_count is known
-             self.main_app.clip_length_label.setText(f"Clip Length: ... frames | Video Length: {self.main_app.frame_count} frames")
+             self.main_app.clip_length_label.setText(
+                 f"Clip Length: ... frames | Video Length: {self.main_app.frame_count} frames"
+             )
+             # Keep the trim spinner's maximum in sync with the loaded video's frame count
+             if hasattr(self.main_app, 'trim_frame_spinner'):
+                 self.main_app.trim_frame_spinner.setMaximum(
+                     max(0, self.main_app.frame_count - 1)
+                 )
 
         # --- Populate Clip Range List ---
         self.main_app.clip_range_list.clear() # Clear previous ranges
@@ -415,4 +448,96 @@ class VideoLoader:
                 fail_count += 1
                 
         print(f"Conversion finished. Success: {success_count}, Failed: {fail_count}")
-        return fail_count == 0 # Return True only if all conversions succeeded or were skipped
+        return fail_count == 0  # Return True only if all conversions succeeded or were skipped
+
+    # ------------------------------------------------------------------
+    # Folder watcher callback
+    # ------------------------------------------------------------------
+
+    def _on_folder_changed(self, changed_path: str) -> None:
+        """
+        Called by ``QFileSystemWatcher`` whenever the watched directory is
+        modified (files added, removed, or renamed).
+
+        Performs a diff between the current disk state and ``video_files`` then:
+        - Inserts new video files into ``video_files`` and the UI list widget.
+        - Removes entries whose files no longer exist on disk.
+
+        Intentionally does **not** replace the full list so that any in-memory
+        state (e.g. crop data, ranges) is preserved for videos that still exist.
+
+        Args:
+            changed_path (str): Directory path reported by the watcher signal
+                (may differ from ``folder_path`` if sub-dirs are also watched).
+        """
+        if not self.main_app.folder_path or not os.path.isdir(self.main_app.folder_path):
+            return
+
+        # ── Current disk state ───────────────────────────────────────────
+        try:
+            disk_files = {
+                os.path.normpath(os.path.join(self.main_app.folder_path, f))
+                for f in os.listdir(self.main_app.folder_path)
+                if f.lower().endswith(_VIDEO_EXTENSIONS)
+            }
+        except OSError:
+            return  # Folder may have been removed
+
+        # ── Current in-memory state ───────────────────────────────────────
+        current_paths = {
+            os.path.normpath(v["original_path"])
+            for v in self.main_app.video_files
+        }
+
+        new_paths = disk_files - current_paths
+        removed_paths = current_paths - disk_files
+
+        changed = False
+
+        # Add new files
+        for path in sorted(new_paths):
+            filename = os.path.basename(path)
+            new_entry = {
+                "original_path": path,
+                "display_name": filename,
+                "copy_number": 0,
+                "export_enabled": False,
+            }
+            self.main_app.video_files.append(new_entry)
+            self.add_video_item(filename)
+            print(f"📁 Folder watcher: added '{filename}'")
+            changed = True
+
+        # Remove missing files
+        for path in sorted(removed_paths):
+            entry = next(
+                (v for v in self.main_app.video_files
+                 if os.path.normpath(v["original_path"]) == path),
+                None,
+            )
+            if not entry:
+                continue
+
+            self.main_app.video_files.remove(entry)
+
+            # Remove from UI list
+            display_name = entry["display_name"]
+            for i in range(self.main_app.video_list.count()):
+                item = self.main_app.video_list.item(i)
+                if item and item.text() == display_name:
+                    self.main_app.video_list.takeItem(i)
+                    break
+
+            # If this was the currently loaded video, clear the viewer
+            if self.main_app.current_video_original_path == path:
+                self.main_app.current_video_original_path = None
+                self.main_app.editor.stop_playback()
+                if self.main_app.cap:
+                    self.main_app.cap.release()
+                    self.main_app.cap = None
+
+            print(f"📁 Folder watcher: removed '{display_name}'")
+            changed = True
+
+        if changed:
+            self.save_session()

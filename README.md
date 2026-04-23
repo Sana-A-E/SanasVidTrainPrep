@@ -5,7 +5,7 @@ The code is mostly done with AI assistance as it is faster than doing it by hand
 
 If I don't notice the bugs (because they are in the part of the app functionality I rarely use) feel free to report them and I might fix them. No promises though. I just wanted to share this in case anyone else needs their video dataset prep app to be more stable and feature complete.
 
-I will not be working further on the captioning aspect of the app, nor upgrading/fixing the Gemini API as there are other apps that do captioning better (I recommend [Vision Captioner](https://github.com/Brekel/VisionCaptioner).)
+I will not be upgrading/fixing the Gemini API as there are other apps that do LLM captioning better (I recommend [Vision Captioner](https://github.com/Brekel/VisionCaptioner) for local LLMs or [Klippbok](https://github.com/alvdansen/klippbok) for cloud-based & local LLMs.)
 
 ## Notable New Features and Changes:
 - Fixed drawing of crop rects to actually work without causing app crashes. Crop rects can now be properly resized and moved after creation as you would expect.
@@ -23,8 +23,13 @@ I will not be working further on the captioning aspect of the app, nor upgrading
 - Frame navigation sub-controls added: **"Start Frame"**, **"End Frame"** jump buttons to quickly navigate to the start and end frames of the current clip range.
 - Range boundary update controls added: **"Update Start F."** and **"Update End F."** to make it easy to quickly change the start and end frames of the range to match the current frame.
 - Added **"Export Current Frame"** button to export the current frame with applied crop and fixed resolution settings. Useful if you want to extract specific frames from your footage for captioning or to include it as a high res image in your dataset.
+- **Video Editing Tab** — a dedicated tab for non-destructive video file operations:
+  - **Trim**: remove unwanted frames from the very start or end of a video. Choose between in-place overwrite (the original file is replaced and immediately reloaded) or creating a `_trimmed` copy alongside it. Uses ffmpeg stream-copy — fast and lossless.
+  - **Split Video**: divide a video into multiple parts by specifying the first frame of each part (comma or space separated). Parts are named `_part01`, `_part02`, etc. and are immediately added to the video list. Optionally moves the original to the Recycle Bin after a successful split.
+- **Real-time Folder Monitoring**: the video list now updates automatically when files appear in or disappear from the currently open folder, without requiring a manual reload.
 
 [View all changes in Changelog](changelog.md).
+
 
 # Outdated Readme of the original VidTrainPrep:
 

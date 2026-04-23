@@ -68,3 +68,19 @@
   - When **Loop is ON**, normal playback (C / Space) restarts from frame 0 when the video ends; Range preview (Z / Y) restarts from the range's start frame when it reaches the range's end frame.
   - When **Loop is OFF** (default), playback stops as before.
   - The button changes colour (blue highlight = ON, muted = OFF) and its tooltip dynamically describes the current state and what clicking will do.
+
+  ## [2026-04-23]
+### Added Features
+- **Video Editing Tab**: A new dedicated **"Video Editing"** tab has been added to the right-panel tab widget, providing non-destructive tools for rearranging video footage without opening an external editor.
+- **Trim Section** (Video Editing tab):
+  - **Overwrite current video** checkbox (checked by default): when enabled the original file is replaced in-place; when unchecked a `_trimmed` copy is created alongside it and added to the video list.
+  - **Trim Start / Trim End** mode selector: choose whether to cut from the beginning or the end of the video.
+  - **Boundary Frame spinner**: clamped to `0 – (frame count – 1)` and automatically updated whenever a new video is loaded. Represents the *first good frame* (Trim Start) or *last good frame* (Trim End).
+  - **Trim button**: executes the trim via ffmpeg stream-copy (no re-encode — fast and lossless). When overwriting, the video capture handle is released beforehand (same safe pattern as Delete Video) and the video is reloaded automatically afterwards with its ranges reset.
+- **Split Video Section** (Video Editing tab):
+  - **Delete original video** checkbox (checked by default): moves the source file to the Recycle Bin after a successful split.
+  - **Frame numbers text field**: accepts one or more frame numbers (first frame of each target part) separated by commas or spaces. Frame 0 is always implicitly the start of the first part.
+  - **Split button**: writes each segment as `_part01`, `_part02`, … using ffmpeg stream-copy, then adds each part to the video list. The original is only deleted once all parts are confirmed written.
+- **Folder Monitoring** (`VideoLoader`): a `QFileSystemWatcher` now monitors the currently open folder for filesystem changes. When a video file is added externally (e.g. copied into the folder), it automatically appears in the video list. When a video file is deleted externally it is automatically removed. No extra dependency — `QFileSystemWatcher` ships with PyQt6.
+- **`scripts/video_file_operator.py`** [new module]: encapsulates all trim and split ffmpeg logic in a clean, reusable, stateless class (`VideoFileOperator`). Uses ffmpeg-python with the `-nostdin` flag (consistent with the rest of the app). Temporary files are used for in-place overwrites to prevent data loss on failure.
+- All new widgets include descriptive rich-text tooltips.
