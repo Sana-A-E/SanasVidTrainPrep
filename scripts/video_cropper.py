@@ -1,4 +1,4 @@
-import sys, os, cv2, ffmpeg, json, numpy as np, send2trash, re, subprocess
+import sys, os, cv2, ffmpeg, json, numpy as np, send2trash, re, subprocess, time
 import uuid  # Import UUID for unique range IDs
 from scripts.custom_graphics_view import CustomGraphicsView
 from PyQt6.QtWidgets import (
@@ -65,7 +65,17 @@ class VideoCropper(QWidget):
 
         # Caption properties (unchanged)
         self.simple_caption = ""
-        self.last_changed_sync = 'duration'
+
+        # Duration-sync tracking:
+        # Records the wall-clock time when the user last manually typed a value
+        # into the Duration field, and the composite key (video_path + range_id)
+        # that was active at that moment.  If a start-frame change happens within
+        # _DURATION_LOCK_SECONDS of that edit AND the key still matches, the
+        # duration is preserved (end frame slides); otherwise end is preserved and
+        # duration is recalculated.
+        self._DURATION_LOCK_SECONDS: float = 20.0
+        self._duration_manually_set_at: float = 0.0   # epoch seconds
+        self._duration_manually_set_for: str = ""     # "<video_path>|<range_id>"
 
         # UI widgets (some changes)
         self.video_list = QListWidget() # Main list of videos/duplicates
@@ -812,6 +822,9 @@ class VideoCropper(QWidget):
         right_panel.addLayout(export_buttons_layout)
         
         main_layout.addLayout(right_panel, 3)
+
+        # After all widgets have been created minimize attribution section by default
+        self.toggle_workflow_labels(True)
     
     def set_aspect_ratio(self, ratio_name):
         ratio_value = self.aspect_ratios.get(ratio_name)
@@ -1550,7 +1563,42 @@ class VideoCropper(QWidget):
             self.clear_crop_region_controller()
             if hasattr(self, 'goto_frame_input'): self.goto_frame_input.clear() # Clear goto input
 
+    def _is_duration_locked(self) -> bool:
+        """
+        Return True when the user recently (within _DURATION_LOCK_SECONDS)
+        manually typed a value into the Duration field for the currently
+        active clip and range.
+
+        When locked:
+          - Editing Start Frame slides End Frame  (end = start + duration).
+          - Editing End Frame slides Start Frame  (start = end - duration).
+        When not locked (default):
+          - Editing Start or End Frame recalculates Duration.
+
+        If the slid boundary would go out of range it is clamped and
+        Duration is recalculated from the actual boundaries.
+        """
+        if not self.current_video_original_path or not self.current_selected_range_id:
+            return False
+        expected_key = f"{self.current_video_original_path}|{self.current_selected_range_id}"
+        elapsed = time.monotonic() - self._duration_manually_set_at
+        return (
+            self._duration_manually_set_for == expected_key
+            and elapsed <= self._DURATION_LOCK_SECONDS
+        )
+
     def update_start_frame_input(self):
+        """
+        Sync logic triggered when the user edits the Start Frame field.
+
+        Default behaviour: the end frame is kept fixed and duration is
+        recalculated as (end - new_start).
+
+        Exception: if the user manually typed a value into the Duration
+        field within the last _DURATION_LOCK_SECONDS seconds for this
+        exact clip and range, the duration is preserved instead (the end
+        frame slides to new_start + duration).
+        """
         if not self.current_selected_range_id: return
         range_data = self.find_range_by_id(self.current_selected_range_id)
         if not range_data: return
@@ -1558,62 +1606,92 @@ class VideoCropper(QWidget):
             new_start = int(self.start_frame_input.text())
             if new_start < 0:
                 new_start = 0
-            
-            if self.last_changed_sync == 'duration':
+
+            if self._is_duration_locked():
+                # Duration was recently set manually — preserve it, slide end.
                 current_duration = int(self.duration_input.text())
                 new_end = min(new_start + current_duration, self.frame_count)
                 if new_end <= new_start:
                     new_end = min(new_start + 1, self.frame_count)
             else:
+                # Default: keep end fixed, recalculate duration.
                 new_end = int(self.end_frame_input.text())
                 if new_end <= new_start:
                     new_end = min(new_start + 1, self.frame_count)
-            
+
             range_data["start"] = new_start
             range_data["end"] = new_end
-            
+
             self.start_frame_input.setText(str(new_start))
             self.end_frame_input.setText(str(new_end))
             self.duration_input.setText(str(new_end - new_start))
-            
+
             current_item = self.clip_range_list.currentItem()
             if current_item:
                 self._update_list_item_text(current_item, range_data)
-            
+
             self.clip_length_label.setText(f"Clip Length: {new_end - new_start} frames | Video Length: {self.frame_count} frames")
             if self.frame_count > 0:
-                 self.editor.update_frame_display(new_start)
-                 self.slider.setValue(new_start)
+                self.editor.update_frame_display(new_start)
+                self.slider.setValue(new_start)
         except ValueError:
             self.start_frame_input.setText(str(range_data.get("start", 0)))
 
     def update_end_frame_input(self):
-        self.last_changed_sync = 'end'
+        """
+        Sync logic triggered when the user edits the End Frame field.
+
+        Default behaviour: the start frame is kept fixed and duration is
+        recalculated as (new_end - start).
+
+        Exception: if the user manually typed a value into the Duration
+        field within the last _DURATION_LOCK_SECONDS seconds for this
+        exact clip and range, the duration is preserved instead (start
+        slides to new_end - duration).  If the slid start would go below
+        0 it is clamped to 0 and duration is recalculated from the
+        actual boundaries.
+        """
         if not self.current_selected_range_id: return
         range_data = self.find_range_by_id(self.current_selected_range_id)
         if not range_data: return
         try:
-            start_frame = int(self.start_frame_input.text())
             new_end = int(self.end_frame_input.text())
             if new_end > self.frame_count:
                 new_end = self.frame_count
-            if new_end <= start_frame:
-                new_end = start_frame + 1
-            
+
+            if self._is_duration_locked():
+                # Duration was recently set manually — preserve it, slide start.
+                current_duration = int(self.duration_input.text())
+                new_start = max(0, new_end - current_duration)
+                if new_start >= new_end:
+                    new_start = max(0, new_end - 1)
+            else:
+                # Default: keep start fixed, recalculate duration.
+                new_start = int(self.start_frame_input.text())
+                if new_end <= new_start:
+                    new_end = new_start + 1
+
+            range_data["start"] = new_start
             range_data["end"] = new_end
+            self.start_frame_input.setText(str(new_start))
             self.end_frame_input.setText(str(new_end))
-            self.duration_input.setText(str(new_end - start_frame))
-            
+            self.duration_input.setText(str(new_end - new_start))
+
             current_item = self.clip_range_list.currentItem()
             if current_item:
                 self._update_list_item_text(current_item, range_data)
-            
-            self.clip_length_label.setText(f"Clip Length: {new_end - start_frame} frames | Video Length: {self.frame_count} frames")
+
+            self.clip_length_label.setText(f"Clip Length: {new_end - new_start} frames | Video Length: {self.frame_count} frames")
         except ValueError:
             self.end_frame_input.setText(str(range_data.get("end", 60)))
 
     def update_range_duration_from_input(self):
-        self.last_changed_sync = 'duration'
+        """
+        Sync logic triggered when the user explicitly edits the Duration
+        field.  Moves the end frame to (start + new_duration) and arms
+        the duration lock for _DURATION_LOCK_SECONDS so that subsequent
+        start-frame edits will preserve this duration instead of the end.
+        """
         if not self.current_selected_range_id: return
         range_data = self.find_range_by_id(self.current_selected_range_id)
         if not range_data: return
@@ -1621,21 +1699,27 @@ class VideoCropper(QWidget):
             start_frame = int(self.start_frame_input.text())
             new_duration = int(self.duration_input.text())
             if new_duration <= 0:
-                 new_duration = range_data.get("end", start_frame) - range_data.get("start", start_frame)
-            
+                new_duration = range_data.get("end", start_frame) - range_data.get("start", start_frame)
+
             new_end = min(start_frame + new_duration, self.frame_count)
             if new_end <= start_frame:
-                 new_duration = range_data.get("end", start_frame) - range_data.get("start", start_frame)
-                 new_end = min(start_frame + new_duration, self.frame_count)
-            
+                new_duration = range_data.get("end", start_frame) - range_data.get("start", start_frame)
+                new_end = min(start_frame + new_duration, self.frame_count)
+
             self.duration_input.setText(str(new_end - start_frame))
             self.end_frame_input.setText(str(new_end))
             range_data["end"] = new_end
-            
+
+            # Arm the duration lock so upcoming start-frame edits preserve duration.
+            self._duration_manually_set_at = time.monotonic()
+            self._duration_manually_set_for = (
+                f"{self.current_video_original_path}|{self.current_selected_range_id}"
+            )
+
             current_item = self.clip_range_list.currentItem()
             if current_item:
                 self._update_list_item_text(current_item, range_data)
-            
+
             self.clip_length_label.setText(f"Clip Length: {new_end - start_frame} frames | Video Length: {self.frame_count} frames")
         except ValueError:
             old_duration = range_data.get("end", start_frame) - range_data.get("start", start_frame)

@@ -119,3 +119,16 @@
 - **Refactored `VideoCropper`**: Extracted video activation logic into `_activate_video_item` for cleaner internal reuse.
 - **Cleaned Up `VideoEditor`**: Removed obsolete manual loading calls in `next_clip` and `navigate_clip`, relying instead on the `currentRowChanged` signal.
 - Made spell checker not flag curly (’) apostrophes as misspelled when used in words like "don't"
+
+## [2026-04-27]
+### Changed
+- Workflow and Attribution section now starts minimized on app start
+- **Clip frame-sync default changed to "duration-only"**:
+  - Editing **Start Frame** or **End Frame** now always recalculates **Duration** (the other boundary frame is kept fixed). This is the default.
+  - **Exception — duration lock**: if the user manually typed a value into the **Duration** field within the last **20 seconds** for the *same clip and range*, the duration is preserved and the *other* boundary frame slides:
+    - Editing **Start Frame** → **End Frame** slides to `start + duration` (clamped to video length).
+    - Editing **End Frame** → **Start Frame** slides to `end - duration` (clamped to ≥ 0).
+  - If a slid boundary hits the video edge it is clamped, and Duration is recalculated from the actual boundaries.
+  - The lock expires automatically after 20 s or when a different clip or range is selected.
+  - Implemented via `_is_duration_locked()` using `time.monotonic()` + a `video_path|range_id` context key, replacing the old `last_changed_sync` string flag.
+
