@@ -132,3 +132,18 @@
   - The lock expires automatically after 20 s or when a different clip or range is selected.
   - Implemented via `_is_duration_locked()` using `time.monotonic()` + a `video_path|range_id` context key, replacing the old `last_changed_sync` string flag.
 
+## [2026-05-04]
+### Performance
+- **Fixed severe frame-navigation and playback lag on large (1000+ frame) videos.** Three root causes were identified and resolved:
+
+  1. **Eliminated full-resolution CPU pixmap scaling on every frame** (`video_editor.py` — `display_frame`):
+     Previously, every rendered frame was uploaded to Qt as a full-resolution `QPixmap` (e.g., 1920 × 1080) and then downscaled using Qt's `SmoothTransformation` (bicubic) on the CPU. This was the largest bottleneck. The fix pre-scales the raw NumPy frame with `cv2.resize(INTER_LINEAR)` — OpenCV's SIMD-optimised resize — *before* wrapping it in `QImage`. The full-resolution `QPixmap` allocation and the Qt-side bicubic pass are now completely avoided.
+
+  2. **Eliminated redundant `fitInView` calls on every frame** (`video_editor.py` — `display_frame`):
+     `graphics_view.fitInView()` was called unconditionally on every frame render, forcing Qt to recompute the view transform matrix and trigger a layout pass each time. The last rendered viewport size is now cached in `_last_viewport_size`; `fitInView` and `setSceneRect` are called only when the viewport dimensions actually change (e.g., window resize). The cache is reset on each video load so the first frame always initialises the scene rect correctly.
+
+  3. **Fixed double frame-decode on every keyboard navigation step** (`video_cropper.py` — `initUI`):
+     The slider was connected to `scrub_video` via both `sliderMoved` *and* `valueChanged`. `valueChanged` also fires on programmatic `setValue` calls inside `update_frame_display`, causing a redundant second `cap.set` + `cap.read` on every ←/→ key press or nudge. The `valueChanged → scrub_video` connection was removed; only `sliderMoved` (user drag) remains.
+
+- **Added thumbnail hover debounce** (`video_editor.py` — `show_thumbnail` / new `_render_thumbnail`):
+  Hovering over the slider previously triggered an immediate seek + frame decode on every mouse-move event, causing hitches on H.264/HEVC video (each seek can decompress an entire GOP). A single-shot 80 ms debounce timer now delays the thumbnail decode until the mouse settles, and the thumbnail frame is pre-scaled with `cv2.resize` before QImage creation — consistent with the main display path.
