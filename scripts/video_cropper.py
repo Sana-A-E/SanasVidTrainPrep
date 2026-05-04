@@ -435,13 +435,12 @@ class VideoCropper(QWidget):
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setEnabled(False)
-        # sliderMoved fires only on user drag — used for interactive scrubbing.
-        # valueChanged is intentionally NOT connected to scrub_video because it
-        # also fires on programmatic setValue calls inside update_frame_display
-        # (even inside blockSignals, the Python-level signal would still fire in
-        # some Qt versions). Connecting it would cause a redundant second
-        # cap.set + cap.read on every keyboard navigation step.
+        # sliderMoved  → throttled scrub during drag (fires only on user drag).
+        # sliderReleased → force-update to final position; also the only signal
+        #   that fires when the user clicks on the slider groove without dragging
+        #   (sliderMoved does NOT fire in that case, and valueChanged is not wired).
         self.slider.sliderMoved.connect(self.editor.scrub_video)
+        self.slider.sliderReleased.connect(self.editor._on_slider_released)
         right_panel.addWidget(self.slider)
 
         clip_length_layout = QHBoxLayout()

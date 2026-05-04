@@ -30,6 +30,11 @@ class VideoEditor:
         # lifetime of the event handler (which would cause a silent segfault).
         self._pending_thumb_frame_pos: int = 0    # target frame index
         self._pending_thumb_slider_pos = None     # QPoint for tooltip placement
+        # Minimum time between scrub updates during slider drag (seconds).
+        # Limits the seek rate on H.264/HEVC where every random-access seek is
+        # expensive.  30 fps = 33 ms is enough for fluid-feeling scrubbing.
+        self._scrub_min_interval: float = 0.033
+        self._last_scrub_time: float = 0.0
 
     def load_video_properties(self, video_path):
         """Opens video, gets properties, displays first frame. Returns True on success."""
@@ -184,13 +189,42 @@ class VideoEditor:
             print(f"Error displaying frame: {e}")
 
     def scrub_video(self, position):
-        """Called when slider is moved interactively OR value changes."""
-        if self.main_app.cap:
-            # Stop any playback when scrubbing starts
-            if self.playback_timer.isActive():
-                self.stop_playback()
-            # Update the frame display based on slider position
-            self.update_frame_display(position)
+        """
+        Called when the slider is dragged by the user (``sliderMoved`` signal).
+
+        Frame seeks on compressed video (H.264/HEVC) are expensive, so this
+        method is time-throttled: at most one seek per ``_scrub_min_interval``
+        seconds (default ≈ 30 fps).  The final position is always honoured via
+        ``_on_slider_released``.
+
+        Args:
+            position (int): Current slider value (frame index).
+        """
+        if not self.main_app.cap:
+            return
+        # Stop any active playback when the user starts scrubbing.
+        if self.playback_timer.isActive():
+            self.stop_playback()
+        # Throttle: skip update if the last seek was too recent.
+        now = time.monotonic()
+        if now - self._last_scrub_time < self._scrub_min_interval:
+            return
+        self._last_scrub_time = now
+        self.update_frame_display(position)
+
+    def _on_slider_released(self):
+        """
+        Slot connected to ``QSlider.sliderReleased``.
+
+        Guarantees the frame display is always updated to the final slider
+        position after any interaction — whether a drag (which may have been
+        throttled) or a click anywhere on the slider groove (which does not
+        emit ``sliderMoved`` and therefore would not trigger ``scrub_video``).
+        """
+        if not self.main_app.cap:
+            return
+        self._last_scrub_time = 0.0   # reset throttle so next drag starts fresh
+        self.update_frame_display(self.main_app.slider.value())
 
     def show_thumbnail(self, event):
         """
@@ -263,8 +297,13 @@ class VideoEditor:
                 self.main_app.thumbnail_label.hide()
                 return
 
-            thumbnail_width  = 160
             thumbnail_height = 90
+            # Preserve the original video's aspect ratio in the thumbnail.
+            src_aspect = (
+                self.main_app.original_width / self.main_app.original_height
+                if self.main_app.original_height > 0 else 16 / 9
+            )
+            thumbnail_width = max(1, int(thumbnail_height * src_aspect))
 
             # Pre-scale in OpenCV to avoid a full-resolution QPixmap
             thumb     = cv2.resize(frame, (thumbnail_width, thumbnail_height),
@@ -389,9 +428,7 @@ class VideoEditor:
                 # Loop: seek back to range start and continue
                 self.main_app.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_playback_start_frame)
                 current_frame_pos = self.current_playback_start_frame
-                print("Range playback looping back to start frame...")
             else:
-                print("Range playback finished.")
                 self.stop_playback()
                 self.update_frame_display(self.current_playback_start_frame)
                 return
@@ -401,9 +438,7 @@ class VideoEditor:
                 # Loop: seek back to the very first frame of the video
                 self.main_app.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 current_frame_pos = 0
-                print("Normal playback looping back to frame 0...")
             else:
-                print("Normal playback finished.")
                 self.stop_playback()
                 return
 

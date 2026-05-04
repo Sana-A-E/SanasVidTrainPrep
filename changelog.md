@@ -147,3 +147,20 @@
 
 - **Added thumbnail hover debounce** (`video_editor.py` — `show_thumbnail` / new `_render_thumbnail`):
   Hovering over the slider previously triggered an immediate seek + frame decode on every mouse-move event, causing hitches on H.264/HEVC video (each seek can decompress an entire GOP). A single-shot 80 ms debounce timer now delays the thumbnail decode until the mouse settles, and the thumbnail frame is pre-scaled with `cv2.resize` before QImage creation — consistent with the main display path.
+
+### Fixed (follow-up)
+- **Fixed two crashes introduced by the thumbnail debounce**:
+  1. `TypeError: disconnect() failed` on first hover — the timer is now connected once in `__init__`; `show_thumbnail` only (re)starts it, with no connect/disconnect on each event.
+  2. Silent C-level segfault during playback — `QMouseEvent` objects are destroyed by Qt after the handler returns. The raw event was being stored and accessed 80 ms later in `_render_thumbnail`, causing a use-after-free. All position data is now extracted synchronously in `show_thumbnail` and stored as plain Python `int` / `QPoint` values. Thumbnail generation is also skipped entirely while the playback timer is active to avoid seek interference.
+
+- **Fixed slider drag still being slow** (`video_editor.py` — `scrub_video`):
+  `scrub_video` was called on every pixel of mouse movement with no rate limiting, causing H.264/HEVC seek calls to queue faster than they could be processed. A time-based throttle of ≈ 30 fps (33 ms minimum between seeks) was added. The final position is always rendered via `_on_slider_released` so the displayed frame never lags behind where the user stopped.
+
+- **Fixed clicking on the slider groove not updating the frame** (`video_cropper.py` — `initUI`; `video_editor.py` — new `_on_slider_released`):
+  Clicking a position on the slider groove emits only `valueChanged` (not wired) and `sliderReleased`. Since `sliderMoved` does not fire for groove clicks, the frame display was never updated. A new `_on_slider_released` slot is now connected to `slider.sliderReleased`; it force-updates to the current slider value and resets the scrub throttle for the next drag.
+
+- **Fixed thumbnail aspect ratio being wrong** (`video_editor.py` — `_render_thumbnail`):
+  The thumbnail was always resized to a fixed 160 × 90 pixels regardless of the video's aspect ratio, causing stretching. The thumbnail width is now computed from the original video's `original_width / original_height` ratio at a fixed height of 90 px.
+
+- **Removed verbose `print()` calls from the playback hot path** (`video_editor.py` — `_playback_step`):
+  "Looping back to start frame…" and "Normal playback finished." were printed on every loop iteration or end-of-stream event, adding unnecessary I/O overhead to the tight playback timer callback. These messages are removed; error conditions are still printed.
