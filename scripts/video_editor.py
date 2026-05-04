@@ -66,16 +66,14 @@ class VideoEditor:
 
         self._seek_thread.start()
 
-        # Main-thread coalescing gate:
-        # A QTimer with interval=0 fires on the NEXT event-loop tick.
-        # Rapid request_seek() calls within the same tick all update
-        # _latest_requested_frame but only ONE seek is posted to the worker,
-        # preventing a backlog of stale decode tasks from queuing up.
+        # Single-in-flight gate: at most ONE seek request is ever queued in the
+        # worker at a time.  When a new request arrives while the worker is busy,
+        # _latest_requested_frame is updated but no new signal is posted.
+        # _on_async_frame_ready posts a single follow-up seek if the latest frame
+        # has changed since the completed seek, converging in exactly one extra
+        # decode after the user stops interacting.
         self._latest_requested_frame: int = -1
-        self._seek_coalesce_timer = QTimer()
-        self._seek_coalesce_timer.setSingleShot(True)
-        self._seek_coalesce_timer.setInterval(0)
-        self._seek_coalesce_timer.timeout.connect(self._fire_coalesced_seek)
+        self._seek_in_flight: bool = False
 
     # ------------------------------------------------------------------ #
     #  Helper: open a VideoCapture trying hardware-accelerated backends   #
@@ -322,11 +320,12 @@ class VideoEditor:
         """
         Posts a non-blocking frame-seek request to ``FrameSeekWorker``.
 
-        Uses a zero-interval single-shot ``QTimer`` to coalesce rapid calls:
-        multiple calls within the same Qt event-loop tick all update
-        ``_latest_requested_frame``, but only ONE seek signal is posted to the
-        worker thread per tick.  This prevents a backlog of stale decode tasks
-        from accumulating during fast slider drags.
+        Enforces a single-in-flight policy: if the worker is already decoding a
+        frame, the new frame number is stored in ``_latest_requested_frame`` but
+        no additional signal is sent.  When the in-flight decode completes,
+        ``_on_async_frame_ready`` checks whether a newer request arrived and
+        immediately posts it — so we always converge to the final position in at
+        most one extra decode after the user stops interacting.
 
         Args:
             frame_number (int): Zero-based frame index to display.
@@ -336,46 +335,60 @@ class VideoEditor:
         self._latest_requested_frame = max(
             0, min(int(frame_number), self.main_app.frame_count - 1)
         )
-        if not self._seek_coalesce_timer.isActive():
-            self._seek_coalesce_timer.start()
+        if not self._seek_in_flight:
+            self._post_seek(self._latest_requested_frame)
 
-    def _fire_coalesced_seek(self) -> None:
+    def _post_seek(self, frame_number: int) -> None:
         """
-        Called by the coalesce timer on the next event-loop tick.
-        Posts the latest requested frame number to the worker thread.
+        Internal helper: marks a seek as in-flight and emits the cross-thread
+        signal to the worker.  Must only be called when ``_seek_in_flight`` is
+        False.
+
+        Args:
+            frame_number (int): Zero-based frame index to decode.
         """
-        fn = self._latest_requested_frame
-        if fn >= 0 and self.main_app.cap:
-            self._seek_proxy.seek_requested.emit(fn)
+        self._seek_in_flight = True
+        self._seek_proxy.seek_requested.emit(frame_number)
 
     def _on_async_frame_ready(self, frame, frame_number: int) -> None:
         """
         Slot called on the main thread when ``FrameSeekWorker`` finishes
-        decoding a requested frame.  Displays the frame and conditionally
-        updates the slider and frame label.
+        decoding a requested frame.
 
-        The slider is only updated when:
-        - The user is **not** currently dragging it (``isSliderDown()`` is
-          False), to prevent the decoded frame from overwriting the slider's
-          visual position mid-drag.
-        - The decoded ``frame_number`` matches ``_latest_requested_frame``
-          (i.e., no newer request has been posted since this seek started),
-          so stale out-of-order frames don't reset the slider position.
+        After displaying the frame, clears ``_seek_in_flight`` and immediately
+        posts one follow-up seek if ``_latest_requested_frame`` is different
+        from the just-decoded frame (i.e., the user moved the slider while the
+        worker was busy).  This guarantees convergence to the final position
+        in exactly one additional decode, with no stale intermediate frames
+        queued.
+
+        The slider is only updated when the user is not mid-drag
+        (``isSliderDown()`` is False) and the decoded frame is still the most
+        recently requested one, preventing visual hop-back during a drag.
 
         Args:
             frame (numpy.ndarray): Decoded BGR frame from the worker.
             frame_number (int): Zero-based index of the decoded frame.
         """
+        # Clear in-flight flag BEFORE potentially posting a follow-up
+        self._seek_in_flight = False
+
         self.display_frame(frame)
+
         is_latest = (frame_number == self._latest_requested_frame)
         if is_latest and not self.main_app.slider.isSliderDown():
             self.main_app.slider.blockSignals(True)
             self.main_app.slider.setValue(frame_number)
             self.main_app.slider.blockSignals(False)
-        # Always update the frame label so the user can see which frame is shown
+
         self.main_app.update_current_frame_label(
             frame_number, self.main_app.frame_count, self.current_fps
         )
+
+        # If the user moved the slider while the worker was busy, post exactly
+        # one more seek for the latest position.  No backlog ever builds up.
+        if not is_latest and self.main_app.cap:
+            self._post_seek(self._latest_requested_frame)
 
     def cleanup(self) -> None:
         """
