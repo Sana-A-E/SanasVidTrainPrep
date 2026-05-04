@@ -1,45 +1,81 @@
 # video_editor.py
 import cv2, time
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen
-from PyQt6.QtCore import Qt, QTimer, QRectF
+from PyQt6.QtCore import Qt, QTimer, QRectF, QThread, QObject, pyqtSignal
 from scripts.interactive_crop_region import InteractiveCropRegion  # New interactive crop region
+from scripts.frame_seek_worker import FrameSeekWorker
+
+
+class _SeekProxy(QObject):
+    """
+    Thin ``QObject`` that lives on the main thread and owns the signals used
+    to send work to ``FrameSeekWorker`` on the background thread.
+
+    ``VideoEditor`` is not a ``QObject``, so it cannot define ``pyqtSignal``
+    directly.  This proxy bridges that gap without changing ``VideoEditor``'s
+    class hierarchy.
+    """
+    seek_requested  = pyqtSignal(int)   # → FrameSeekWorker.seek_to
+    video_opened    = pyqtSignal(str)   # → FrameSeekWorker.open_video
+    worker_release  = pyqtSignal()      # → FrameSeekWorker.release
 
 class VideoEditor:
     def __init__(self, main_app):
         self.main_app = main_app
-        self.playback_timer = QTimer() # Use a persistent timer
+        self.playback_timer = QTimer()
         self.playback_timer.timeout.connect(self._playback_step)
-        # Add state flag for range playback
         self.is_playing_range = False
-        self.current_range_end_frame = -1 # Store end frame for range playback
-        # FPS cache to avoid repeated cap.get calls
+        self.current_range_end_frame = -1
         self.current_fps = 0.0
         # Viewport size cache — avoids redundant fitInView calls every frame.
-        # Stores the last (width, height) at which fitInView was computed.
         self._last_viewport_size: tuple[int, int] = (-1, -1)
         # Debounce timer for slider-hover thumbnail generation.
-        # Fires 80 ms after the mouse stops moving to avoid decoding frames on
-        # every tiny mouse movement, which causes seek hitches on H.264/HEVC.
         self._thumb_debounce_timer = QTimer()
         self._thumb_debounce_timer.setSingleShot(True)
         self._thumb_debounce_timer.setInterval(80)
-        # Connected once here; show_thumbnail only (re)starts the timer.
         self._thumb_debounce_timer.timeout.connect(self._render_thumbnail)
-        # Pending thumbnail data — populated synchronously from the hover event
-        # so we never hold a reference to a temporary Qt event object past the
-        # lifetime of the event handler (which would cause a silent segfault).
-        self._pending_thumb_frame_pos: int = 0    # target frame index
-        self._pending_thumb_slider_pos = None     # QPoint for tooltip placement
-        # Minimum time between scrub updates during slider drag (seconds).
-        # Limits the seek rate on H.264/HEVC where every random-access seek is
-        # expensive.  30 fps = 33 ms is enough for fluid-feeling scrubbing.
+        self._pending_thumb_frame_pos: int = 0
+        self._pending_thumb_slider_pos = None
+        # Scrub throttle (kept for compatibility; less critical now that seeks
+        # are async, but still useful to avoid over-flooding the worker queue).
         self._scrub_min_interval: float = 0.033
         self._last_scrub_time: float = 0.0
         # Dedicated VideoCapture for thumbnail rendering.
-        # Keeping it separate from the main cap means thumbnail seeks never
-        # disturb the playback/scrub decode position, and no restore-seek is
-        # needed after each thumbnail — halving the seek cost per thumbnail.
         self._thumb_cap = None
+
+        # ------------------------------------------------------------------
+        # Background seek worker — owns its own VideoCapture and processes
+        # frame-decode requests without blocking the main UI thread.
+        # ------------------------------------------------------------------
+        self._seek_proxy  = _SeekProxy()
+        self._seek_worker = FrameSeekWorker()
+        self._seek_thread = QThread()
+        self._seek_thread.setObjectName("FrameSeekThread")
+
+        # Move the worker to the background thread
+        self._seek_worker.moveToThread(self._seek_thread)
+
+        # Cross-thread signal connections (all become QueuedConnections)
+        self._seek_proxy.seek_requested.connect(self._seek_worker.seek_to)
+        self._seek_proxy.video_opened.connect(self._seek_worker.open_video)
+        self._seek_proxy.worker_release.connect(self._seek_worker.release)
+
+        # Worker → main thread: frame_ready is delivered on the main thread
+        # because the connection was established from the main thread.
+        self._seek_worker.frame_ready.connect(self._on_async_frame_ready)
+
+        self._seek_thread.start()
+
+        # Main-thread coalescing gate:
+        # A QTimer with interval=0 fires on the NEXT event-loop tick.
+        # Rapid request_seek() calls within the same tick all update
+        # _latest_requested_frame but only ONE seek is posted to the worker,
+        # preventing a backlog of stale decode tasks from queuing up.
+        self._latest_requested_frame: int = -1
+        self._seek_coalesce_timer = QTimer()
+        self._seek_coalesce_timer.setSingleShot(True)
+        self._seek_coalesce_timer.setInterval(0)
+        self._seek_coalesce_timer.timeout.connect(self._fire_coalesced_seek)
 
     # ------------------------------------------------------------------ #
     #  Helper: open a VideoCapture trying hardware-accelerated backends   #
@@ -117,6 +153,10 @@ class VideoEditor:
             # Open a dedicated capture for thumbnails so hover seeks never
             # disturb the main cap’s decode position.
             self._thumb_cap = self._open_capture(video_path)
+
+            # Notify the background seek worker to re-open this video
+            # (uses a queued signal so the worker thread handles it safely).
+            self._seek_proxy.video_opened.emit(video_path)
 
             # Set slider range and enable
             self.main_app.slider.setMaximum(self.main_app.frame_count - 1)
@@ -248,39 +288,104 @@ class VideoEditor:
         """
         Called when the slider is dragged by the user (``sliderMoved`` signal).
 
-        Frame seeks on compressed video (H.264/HEVC) are expensive, so this
-        method is time-throttled: at most one seek per ``_scrub_min_interval``
-        seconds (default ≈ 30 fps).  The final position is always honoured via
-        ``_on_slider_released``.
+        Posts an async seek request to ``FrameSeekWorker`` so the main thread
+        is never blocked.  A lightweight time-throttle prevents flooding the
+        worker queue during very fast drags.
 
         Args:
             position (int): Current slider value (frame index).
         """
         if not self.main_app.cap:
             return
-        # Stop any active playback when the user starts scrubbing.
         if self.playback_timer.isActive():
             self.stop_playback()
-        # Throttle: skip update if the last seek was too recent.
         now = time.monotonic()
         if now - self._last_scrub_time < self._scrub_min_interval:
             return
         self._last_scrub_time = now
-        self.update_frame_display(position)
+        self.request_seek(position)
 
     def _on_slider_released(self):
         """
         Slot connected to ``QSlider.sliderReleased``.
 
-        Guarantees the frame display is always updated to the final slider
-        position after any interaction — whether a drag (which may have been
-        throttled) or a click anywhere on the slider groove (which does not
-        emit ``sliderMoved`` and therefore would not trigger ``scrub_video``).
+        Guarantees a seek is posted for the final slider position after any
+        interaction — drag (possibly throttled) or groove click (which does not
+        emit ``sliderMoved``).
         """
         if not self.main_app.cap:
             return
-        self._last_scrub_time = 0.0   # reset throttle so next drag starts fresh
-        self.update_frame_display(self.main_app.slider.value())
+        self._last_scrub_time = 0.0
+        self.request_seek(self.main_app.slider.value())
+
+    def request_seek(self, frame_number: int) -> None:
+        """
+        Posts a non-blocking frame-seek request to ``FrameSeekWorker``.
+
+        Uses a zero-interval single-shot ``QTimer`` to coalesce rapid calls:
+        multiple calls within the same Qt event-loop tick all update
+        ``_latest_requested_frame``, but only ONE seek signal is posted to the
+        worker thread per tick.  This prevents a backlog of stale decode tasks
+        from accumulating during fast slider drags.
+
+        Args:
+            frame_number (int): Zero-based frame index to display.
+        """
+        if not self.main_app.cap:
+            return
+        self._latest_requested_frame = max(
+            0, min(int(frame_number), self.main_app.frame_count - 1)
+        )
+        if not self._seek_coalesce_timer.isActive():
+            self._seek_coalesce_timer.start()
+
+    def _fire_coalesced_seek(self) -> None:
+        """
+        Called by the coalesce timer on the next event-loop tick.
+        Posts the latest requested frame number to the worker thread.
+        """
+        fn = self._latest_requested_frame
+        if fn >= 0 and self.main_app.cap:
+            self._seek_proxy.seek_requested.emit(fn)
+
+    def _on_async_frame_ready(self, frame, frame_number: int) -> None:
+        """
+        Slot called on the main thread when ``FrameSeekWorker`` finishes
+        decoding a requested frame.  Displays the frame and conditionally
+        updates the slider and frame label.
+
+        The slider is only updated when:
+        - The user is **not** currently dragging it (``isSliderDown()`` is
+          False), to prevent the decoded frame from overwriting the slider's
+          visual position mid-drag.
+        - The decoded ``frame_number`` matches ``_latest_requested_frame``
+          (i.e., no newer request has been posted since this seek started),
+          so stale out-of-order frames don't reset the slider position.
+
+        Args:
+            frame (numpy.ndarray): Decoded BGR frame from the worker.
+            frame_number (int): Zero-based index of the decoded frame.
+        """
+        self.display_frame(frame)
+        is_latest = (frame_number == self._latest_requested_frame)
+        if is_latest and not self.main_app.slider.isSliderDown():
+            self.main_app.slider.blockSignals(True)
+            self.main_app.slider.setValue(frame_number)
+            self.main_app.slider.blockSignals(False)
+        # Always update the frame label so the user can see which frame is shown
+        self.main_app.update_current_frame_label(
+            frame_number, self.main_app.frame_count, self.current_fps
+        )
+
+    def cleanup(self) -> None:
+        """
+        Stops the background seek thread gracefully.  Must be called before the
+        application exits (e.g. from ``VideoCropper.closeEvent``) to avoid
+        QThread destruction warnings.
+        """
+        self._seek_proxy.worker_release.emit()
+        self._seek_thread.quit()
+        self._seek_thread.wait(2000)   # wait up to 2 s for clean shutdown
 
     def show_thumbnail(self, event):
         """

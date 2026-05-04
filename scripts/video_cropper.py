@@ -1516,6 +1516,8 @@ class VideoCropper(QWidget):
             self._caption_save_timer.stop()
             self._save_caption_now()
         self.loader.save_session()
+        # Stop the background seek thread cleanly before the window closes.
+        self.editor.cleanup()
         event.accept()
 
     def select_range(self, item):

@@ -169,4 +169,14 @@
   The root cause of the 4-second seek delay was OpenCV's FFMPEG backend doing **software H.264 decode-and-discard**: to reach frame N in a compressed GOP, it decodes and discards every intermediate frame from the nearest keyframe. For 60fps H.264 video with a 2-second keyframe interval, this means decoding up to 119 frames in software (~3–5 s on a typical CPU). The new `_open_capture()` helper tries backends in order: **`CAP_MSMF`** (Windows Media Foundation — uses the system's hardware H.264/H.265 decoder via Intel QSV, NVIDIA NVDEC, or AMD VCE, the same path VLC uses) → `CAP_FFMPEG` → `CAP_ANY`. MSMF performs keyframe-approximate seeking natively, eliminating the decode-and-discard pass.
 
 - **Dedicated thumbnail VideoCapture** (`video_editor.py` — `_thumb_cap` / `_render_thumbnail`):
-  The thumbnail renderer previously shared the main `cap`, forcing a **double seek per thumbnail**: one to the thumbnail frame, then one back to the current playback position. With a separate `_thumb_cap` opened alongside the main cap, the restore-seek is eliminated entirely. `_thumb_cap` is opened (and released/recreated) alongside the main cap in `load_video_properties`.
+
+- **Moved interactive frame-seeking off the main UI thread** (`scripts/frame_seek_worker.py` — new; `video_editor.py` — `_SeekProxy`, `request_seek`, `_on_async_frame_ready`, `cleanup`; `video_cropper.py` — `closeEvent`):
+  Even with MSMF hardware decoding, seeking to an exact frame takes ~800 ms because the decoder decompresses all frames between the nearest keyframe and the target. Performing this on the main thread freezes the entire UI. The fix moves all interactive seeking to a `FrameSeekWorker` running on a dedicated `QThread` with its own `VideoCapture`.
+
+  Key design decisions:
+  - **"Latest wins" coalescing**: new seek requests arriving while the worker is busy overwrite the pending slot; only the most-recently-requested frame is emitted. This prevents a growing queue backlog during fast slider drags.
+  - **`_SeekProxy(QObject)`**: a thin proxy owning the cross-thread `pyqtSignal` definitions, since `VideoEditor` is not a `QObject`.
+  - **`request_seek(frame_number)`**: replaces direct `update_frame_display()` calls in `scrub_video` and `_on_slider_released`; posts asynchronously and returns immediately so the UI never freezes.
+  - **`_on_async_frame_ready(frame, frame_number)`**: called back on the main thread via Qt queued connection; updates the viewport, slider, and frame label.
+  - **`cleanup()`**: stops the thread gracefully; called from `VideoCropper.closeEvent`.
+  - Playback (`_playback_step`) continues to use synchronous sequential `cap.read()`, which needs no seek and is fast.
