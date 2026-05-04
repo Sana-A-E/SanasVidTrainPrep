@@ -35,52 +35,108 @@ class VideoEditor:
         # expensive.  30 fps = 33 ms is enough for fluid-feeling scrubbing.
         self._scrub_min_interval: float = 0.033
         self._last_scrub_time: float = 0.0
+        # Dedicated VideoCapture for thumbnail rendering.
+        # Keeping it separate from the main cap means thumbnail seeks never
+        # disturb the playback/scrub decode position, and no restore-seek is
+        # needed after each thumbnail — halving the seek cost per thumbnail.
+        self._thumb_cap = None
+
+    # ------------------------------------------------------------------ #
+    #  Helper: open a VideoCapture trying hardware-accelerated backends   #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _open_capture(video_path: str) -> cv2.VideoCapture | None:
+        """
+        Opens a ``cv2.VideoCapture`` for ``video_path`` using the fastest
+        available backend on the current platform.
+
+        Priority:
+        1. ``CAP_MSMF`` (Windows Media Foundation) — uses the OS hardware
+           H.264/H.265 decoder (Intel QSV, NVIDIA NVDEC, AMD VCE) and performs
+           keyframe-approximate seeking, matching VLC's behaviour.
+        2. ``CAP_FFMPEG`` — software decoder, slower seeking but universal.
+        3. ``CAP_ANY`` — last-resort fallback.
+
+        Args:
+            video_path (str): Absolute path to the video file.
+
+        Returns:
+            cv2.VideoCapture | None: An opened capture, or None on failure.
+        """
+        for backend in (cv2.CAP_MSMF, cv2.CAP_FFMPEG, cv2.CAP_ANY):
+            cap = cv2.VideoCapture(video_path, backend)
+            if cap.isOpened() and int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) > 0:
+                return cap
+            cap.release()
+        return None
 
     def load_video_properties(self, video_path):
-        """Opens video, gets properties, displays first frame. Returns True on success."""
+        """
+        Opens the video, reads its properties, displays the first frame,
+        and initialises a dedicated thumbnail capture.
+
+        Uses the fastest available backend (MSMF → FFMPEG → CAP_ANY).
+
+        Args:
+            video_path (str): Absolute path to the video file.
+
+        Returns:
+            bool: True if the video was opened and the first frame displayed.
+        """
         try:
+            # Release existing captures
             if self.main_app.cap:
-                 self.main_app.cap.release()
-            self.main_app.cap = cv2.VideoCapture(video_path)
-            if not self.main_app.cap.isOpened():
+                self.main_app.cap.release()
+            if self._thumb_cap:
+                self._thumb_cap.release()
+                self._thumb_cap = None
+
+            cap = self._open_capture(video_path)
+            if cap is None:
                 print(f"Error: Could not open video file: {video_path}")
                 self.main_app.cap = None
-                self.current_fps = 0.0 # Reset FPS cache
+                self.current_fps = 0.0
                 return False
-                
-            self.main_app.frame_count = int(self.main_app.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            self.main_app.original_width = int(self.main_app.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            self.main_app.original_height = int(self.main_app.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            self.current_fps = self.main_app.cap.get(cv2.CAP_PROP_FPS) # Cache FPS
+
+            self.main_app.cap = cap
+            self.main_app.frame_count  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            self.main_app.original_width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            self.main_app.original_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            self.current_fps = cap.get(cv2.CAP_PROP_FPS)
             if self.current_fps <= 0:
                 print("Warning: Could not determine video FPS. Using fallback 30.")
-                self.current_fps = 30.0 # Fallback FPS
-            
+                self.current_fps = 30.0
+
             if self.main_app.frame_count <= 0:
-                 print(f"Warning: Video has {self.main_app.frame_count} frames. Cannot process.")
-                 self.main_app.cap.release()
-                 self.main_app.cap = None
-                 self.current_fps = 0.0
-                 return False
-                 
+                print(f"Warning: Video has {self.main_app.frame_count} frames. Cannot process.")
+                cap.release()
+                self.main_app.cap = None
+                self.current_fps = 0.0
+                return False
+
+            # Open a dedicated capture for thumbnails so hover seeks never
+            # disturb the main cap’s decode position.
+            self._thumb_cap = self._open_capture(video_path)
+
             # Set slider range and enable
             self.main_app.slider.setMaximum(self.main_app.frame_count - 1)
             self.main_app.slider.setEnabled(True)
-            self.main_app.slider.setValue(0) # Start slider at 0
+            self.main_app.slider.setValue(0)
 
             # Invalidate the viewport cache so fitInView is called at least once
-            # for the first frame of this new video (aspect ratio may differ from
-            # the previous video, so the scene rect must be re-established).
+            # for the first frame of this new video (aspect ratio may differ).
             self._last_viewport_size = (-1, -1)
 
-            # Display the first frame (this now updates the label too)
             return self.update_frame_display(0)
 
         except Exception as e:
             print(f"Error loading video properties: {e}")
             if self.main_app.cap:
-                 self.main_app.cap.release()
+                self.main_app.cap.release()
             self.main_app.cap = None
+            if self._thumb_cap:
+                self._thumb_cap.release()
+                self._thumb_cap = None
             self.current_fps = 0.0
             return False
 
@@ -269,48 +325,43 @@ class VideoEditor:
         """
         Decodes and displays the hover-thumbnail for the queued frame position.
         Called by the debounce timer 80 ms after the last mouse-move event.
-        Uses ``_pending_thumb_frame_pos`` and ``_pending_thumb_slider_pos``
-        populated synchronously by ``show_thumbnail``.
+
+        Uses the dedicated ``_thumb_cap`` so the main cap’s decode position is
+        never disturbed.  No restore-seek is needed after reading the thumbnail
+        frame, halving the seek overhead compared to using the main cap.
         """
         if self._pending_thumb_slider_pos is None:
             return
-        if not self.main_app.cap or not self.main_app.cap.isOpened():
+        thumb_cap = self._thumb_cap
+        if thumb_cap is None or not thumb_cap.isOpened():
             return
-        # Double-check: don't seek during live playback
+        # Don’t seek during live playback — the thumb cap is shared with nothing,
+        # but a slow seek would still block the UI thread.
         if self.playback_timer.isActive():
             return
         try:
-            frame_pos = self._pending_thumb_frame_pos
+            frame_pos       = self._pending_thumb_frame_pos
             slider_global_pos = self._pending_thumb_slider_pos
 
-            # Save the current decode position so we can restore it after the
-            # thumbnail seek without disturbing normal scrub/navigation state.
-            saved_cap_pos = int(self.main_app.cap.get(cv2.CAP_PROP_POS_FRAMES))
-
-            self.main_app.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_pos)
-            ret, frame = self.main_app.cap.read()
-
-            # Restore the previous position immediately.
-            self.main_app.cap.set(cv2.CAP_PROP_POS_FRAMES, saved_cap_pos)
+            thumb_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_pos)
+            ret, frame = thumb_cap.read()
+            # No position restoration needed — thumbnail has its own capture.
 
             if not ret or frame is None:
                 self.main_app.thumbnail_label.hide()
                 return
 
             thumbnail_height = 90
-            # Preserve the original video's aspect ratio in the thumbnail.
             src_aspect = (
                 self.main_app.original_width / self.main_app.original_height
                 if self.main_app.original_height > 0 else 16 / 9
             )
             thumbnail_width = max(1, int(thumbnail_height * src_aspect))
 
-            # Pre-scale in OpenCV to avoid a full-resolution QPixmap
             thumb     = cv2.resize(frame, (thumbnail_width, thumbnail_height),
                                    interpolation=cv2.INTER_LINEAR)
             thumb_rgb = cv2.cvtColor(thumb, cv2.COLOR_BGR2RGB)
             h, w, ch  = thumb_rgb.shape
-            # QPixmap.fromImage copies the buffer, so thumb_rgb lifetime is fine
             q_img  = QImage(thumb_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
             pixmap = QPixmap.fromImage(q_img)
 

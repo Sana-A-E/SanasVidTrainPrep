@@ -164,3 +164,9 @@
 
 - **Removed verbose `print()` calls from the playback hot path** (`video_editor.py` — `_playback_step`):
   "Looping back to start frame…" and "Normal playback finished." were printed on every loop iteration or end-of-stream event, adding unnecessary I/O overhead to the tight playback timer callback. These messages are removed; error conditions are still printed.
+
+- **Switched VideoCapture to hardware-accelerated backend** (`video_editor.py` — new `_open_capture` / `load_video_properties`):
+  The root cause of the 4-second seek delay was OpenCV's FFMPEG backend doing **software H.264 decode-and-discard**: to reach frame N in a compressed GOP, it decodes and discards every intermediate frame from the nearest keyframe. For 60fps H.264 video with a 2-second keyframe interval, this means decoding up to 119 frames in software (~3–5 s on a typical CPU). The new `_open_capture()` helper tries backends in order: **`CAP_MSMF`** (Windows Media Foundation — uses the system's hardware H.264/H.265 decoder via Intel QSV, NVIDIA NVDEC, or AMD VCE, the same path VLC uses) → `CAP_FFMPEG` → `CAP_ANY`. MSMF performs keyframe-approximate seeking natively, eliminating the decode-and-discard pass.
+
+- **Dedicated thumbnail VideoCapture** (`video_editor.py` — `_thumb_cap` / `_render_thumbnail`):
+  The thumbnail renderer previously shared the main `cap`, forcing a **double seek per thumbnail**: one to the thumbnail frame, then one back to the current playback position. With a separate `_thumb_cap` opened alongside the main cap, the restore-seek is eliminated entirely. `_thumb_cap` is opened (and released/recreated) alongside the main cap in `load_video_properties`.
