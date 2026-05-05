@@ -1,5 +1,6 @@
 # video_editor.py
-import cv2, time
+import cv2, time, av
+import numpy as np
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen
 from PyQt6.QtCore import Qt, QTimer, QRectF, QThread, QObject, pyqtSignal
 from scripts.interactive_crop_region import InteractiveCropRegion
@@ -82,6 +83,19 @@ class VideoEditor:
         self._seek_in_flight: bool = False
 
         # ------------------------------------------------------------------
+        # PyAV sequential-playback container (main-thread only).
+        # Kept separate from the background seek worker so the worker thread
+        # is never starved by playback I/O, and so sequential reads stay fast
+        # (libavcodec just decodes the next compressed frame — no seeking).
+        # ------------------------------------------------------------------
+        self._video_path: str = ""              # last successfully opened path
+        self._pyav_play_container = None        # av.InputContainer | None
+        self._pyav_play_stream    = None        # av.VideoStream  | None
+        self._pyav_play_iter      = None        # frame iterator  | None
+        self._pyav_play_fps:   float = 0.0
+        self._pyav_play_tb:    float = 0.0
+
+        # ------------------------------------------------------------------
         # Thumbnail worker — PyAVThumbnailWorker uses keyframe-only seeking
         # (~5.7 ms avg) with a 16-entry LRU cache (~0 ms on cache hit).
         # Emits QImage (thread-safe); main thread converts to QPixmap.
@@ -143,9 +157,11 @@ class VideoEditor:
             bool: True if the video was opened and the first frame displayed.
         """
         try:
-            # Release existing main cap
+            # Release existing main cap and old PyAV playback container so the
+            # next play action opens a fresh container for the new video file.
             if self.main_app.cap:
                 self.main_app.cap.release()
+            self._close_pyav_playback()
 
             cap = self._open_capture(video_path)
             if cap is None:
@@ -169,6 +185,9 @@ class VideoEditor:
                 self.main_app.cap = None
                 self.current_fps = 0.0
                 return False
+
+            # Track the path so the playback container can be (re-)opened.
+            self._video_path = video_path
 
             # Notify the background seek worker (PyAV frame-accurate)
             self._seek_proxy.video_opened.emit(video_path)
@@ -427,6 +446,9 @@ class VideoEditor:
         self._thumb_thread.quit()
         self._thumb_thread.wait(2000)
 
+        # PyAV playback container
+        self._close_pyav_playback()
+
     def show_thumbnail(self, event):
         """
         Queues a hover-thumbnail render for the slider position under the mouse.
@@ -511,6 +533,80 @@ class VideoEditor:
         """
         pass
 
+    # ------------------------------------------------------------------ #
+    #  PyAV sequential-playback helpers (main-thread, no QThread needed)  #
+    # ------------------------------------------------------------------ #
+
+    def _close_pyav_playback(self) -> None:
+        """Releases the dedicated PyAV playback container if open."""
+        if self._pyav_play_container is not None:
+            try:
+                self._pyav_play_container.close()
+            except Exception:
+                pass
+            self._pyav_play_container = None
+            self._pyav_play_stream    = None
+            self._pyav_play_iter      = None
+
+    def _open_pyav_playback(self) -> bool:
+        """
+        Opens (or re-opens) a dedicated ``av.InputContainer`` for sequential
+        playback using the current ``_video_path``.
+
+        Returns:
+            bool: True if the container was opened successfully.
+        """
+        self._close_pyav_playback()
+        if not self._video_path:
+            return False
+        try:
+            container = av.open(self._video_path)
+            stream = container.streams.video[0]
+            fps = float(stream.average_rate)
+            tb  = float(stream.time_base)
+            if fps <= 0 or tb <= 0:
+                container.close()
+                print("VideoEditor._open_pyav_playback: invalid fps/time_base.")
+                return False
+            self._pyav_play_container = container
+            self._pyav_play_stream    = stream
+            self._pyav_play_fps       = fps
+            self._pyav_play_tb        = tb
+            return True
+        except Exception as e:
+            print(f"VideoEditor._open_pyav_playback: failed to open '{self._video_path}': {e}")
+            return False
+
+    def _seek_pyav_playback(self, frame_number: int) -> bool:
+        """
+        Seeks the playback container to the nearest I-frame at or before
+        ``frame_number`` and resets the sequential frame iterator.
+
+        Uses ``container.seek()`` with ``backward=True`` — same strategy as
+        ``PyAVSeekWorker`` (~56 ms avg vs ~640 ms for MSMF).
+
+        Args:
+            frame_number (int): Zero-based target frame index.
+
+        Returns:
+            bool: True if the seek succeeded and the iterator was reset.
+        """
+        if self._pyav_play_container is None:
+            return False
+        try:
+            target_pts = int(frame_number / self._pyav_play_fps / self._pyav_play_tb)
+            self._pyav_play_container.seek(
+                target_pts,
+                stream=self._pyav_play_stream,
+                backward=True,
+                any_frame=False,
+            )
+            self._pyav_play_iter = self._pyav_play_container.decode(self._pyav_play_stream)
+            return True
+        except Exception as e:
+            print(f"VideoEditor._seek_pyav_playback: seek error at frame {frame_number}: {e}")
+            return False
+
     def toggle_play_forward(self):
         """Toggles normal playback from the current slider position."""
         if self.is_playing_range:  # Stop range playback before starting normal playback
@@ -537,7 +633,14 @@ class VideoEditor:
 
     def _start_playback(self, range_playback=False, start_frame=None, end_frame=None):
         """
-        Begins the playback timer.
+        Begins the playback timer using a dedicated PyAV sequential-read
+        container so the main thread is never blocked by MSMF seeking.
+
+        Strategy:
+        - Open (or reuse) a PyAV container for the current video.
+        - Seek to ``start_frame`` via PyAV (avg ~56 ms vs ~640 ms for MSMF).
+        - Iterate frames sequentially in ``_playback_step`` — no seeking needed
+          between frames, so each step is just one H.264/HEVC frame decode.
 
         Args:
             range_playback (bool): If True, confine playback to [start_frame, end_frame).
@@ -568,8 +671,6 @@ class VideoEditor:
                 self.current_playback_start_frame = start_frame
                 self.current_playback_end_frame = end_frame
                 self.current_range_end_frame = end_frame
-                self.main_app.cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-                self.main_app.slider.setValue(start_frame)
             else:
                 print(f"Cannot start range playback: Invalid start/end frames ({start_frame}, {end_frame})")
                 self.stop_playback()
@@ -578,79 +679,104 @@ class VideoEditor:
             self.current_playback_start_frame = self.main_app.slider.value()
 
         loop_hint = " [looping]" if self.main_app.loop_enabled else ""
-        print(f"Starting {playback_mode_msg}{loop_hint} playback from {self.current_playback_start_frame} to {self.current_playback_end_frame}")
+        print(f"Starting {playback_mode_msg}{loop_hint} playback from "
+              f"{self.current_playback_start_frame} to {self.current_playback_end_frame}")
 
-        if not self.update_frame_display(self.current_playback_start_frame):
-            print(f"Error seeking to start frame {self.current_playback_start_frame}. Aborting playback.")
+        # ── Open PyAV playback container (if not already open for this video) ──
+        if self._pyav_play_container is None:
+            if not self._open_pyav_playback():
+                print("Cannot start playback: failed to open PyAV playback container.")
+                self.stop_playback()
+                return
+
+        # ── Seek PyAV container to start frame (~56 ms, no UI freeze) ──────────
+        if not self._seek_pyav_playback(self.current_playback_start_frame):
+            print(f"Cannot start playback: PyAV seek to frame "
+                  f"{self.current_playback_start_frame} failed.")
             self.stop_playback()
             return
 
+        # ── Start timer at the correct speed ────────────────────────────────────
         speed = self.main_app.playback_speed_spinner.value()
-        interval = int((1000 / self.current_fps) / speed) if self.current_fps > 0 else int(33 / speed)
+        interval = max(1, int((1000 / self.current_fps) / speed)) if self.current_fps > 0 \
+            else max(1, int(33 / speed))
         self.playback_timer.start(interval)
 
     def _playback_step(self):
-        """Reads and displays the next frame during playback."""
+        """
+        Reads and displays the next frame during playback.
+
+        Frame data comes from the dedicated PyAV sequential-read container
+        (``_pyav_play_iter``).  Sequential PyAV decoding is fast because there
+        is no seeking — libavcodec just decompresses the next packet in the
+        bitstream.  The slider and frame label are updated after each frame.
+        """
         is_active = self.main_app.is_playing or self.is_playing_range
-        if not self.main_app.cap or not self.main_app.cap.isOpened() or not is_active:
+        if not self._pyav_play_iter or not is_active:
             self.stop_playback()
             return
 
-        # Position *before* reading the next frame (cv2 POS_FRAMES = next-to-read index)
-        current_frame_pos = int(self.main_app.cap.get(cv2.CAP_PROP_POS_FRAMES))
-
-        # --- End-of-stream checks ---
-        if self.is_playing_range and current_frame_pos >= self.current_range_end_frame:
-            if self.main_app.loop_enabled:
-                # Loop: seek back to range start and continue
-                self.main_app.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_playback_start_frame)
-                current_frame_pos = self.current_playback_start_frame
-            else:
-                self.stop_playback()
-                self.update_frame_display(self.current_playback_start_frame)
-                return
-
-        elif self.main_app.is_playing and current_frame_pos >= self.current_playback_end_frame:
-            if self.main_app.loop_enabled:
-                # Loop: seek back to the very first frame of the video
-                self.main_app.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                current_frame_pos = 0
+        try:
+            av_frame = next(self._pyav_play_iter)
+        except StopIteration:
+            # End of stream
+            if (self.main_app.is_playing and self.main_app.loop_enabled) or \
+               (self.is_playing_range and self.main_app.loop_enabled):
+                start = self.current_playback_start_frame
+                if not self._seek_pyav_playback(start):
+                    self.stop_playback()
+                    return
+                try:
+                    av_frame = next(self._pyav_play_iter)
+                except StopIteration:
+                    self.stop_playback()
+                    return
             else:
                 self.stop_playback()
                 return
-
-        # --- Read and Display Frame ---
-        ret, frame = self.main_app.cap.read()
-        if ret and frame is not None:
-            # Calculate the frame index that was just *read*
-            actual_read_frame = current_frame_pos # Since POS_FRAMES is next index before read
-            if actual_read_frame >= self.main_app.frame_count: # Handle potential off-by-one at end
-                actual_read_frame = self.main_app.frame_count - 1
-
-            # Display frame first
-            self.display_frame(frame)
-
-            # Update slider (block signals)
-            self.main_app.slider.blockSignals(True)
-            self.main_app.slider.setValue(actual_read_frame)
-            self.main_app.slider.blockSignals(False)
-
-            # Update label
-            self.main_app.update_current_frame_label(actual_read_frame, self.main_app.frame_count, self.current_fps)
-
-        else:
-            print("End of stream or read error during playback.")
+        except Exception as e:
+            print(f"Playback error: {e}")
             self.stop_playback()
-            # Update label to show the last successfully read frame?
-            last_known_frame = current_frame_pos -1 if current_frame_pos > 0 else 0
-            last_known_frame = max(0, min(last_known_frame, self.main_app.frame_count - 1))
-            self.main_app.update_current_frame_label(last_known_frame, self.main_app.frame_count, self.current_fps)
+            return
+
+        # Convert PyAV frame → BGR ndarray → display
+        frame_bgr = av_frame.to_ndarray(format='bgr24')
+
+        # Derive the zero-based frame number from the frame's PTS
+        if av_frame.pts is not None and self._pyav_play_tb > 0 and self._pyav_play_fps > 0:
+            actual_read_frame = int(av_frame.pts * self._pyav_play_tb * self._pyav_play_fps)
+            actual_read_frame = max(0, min(actual_read_frame, self.main_app.frame_count - 1))
+        else:
+            actual_read_frame = self.main_app.slider.value()
+
+        # --- End-of-range check for range playback ---
+        if self.is_playing_range and actual_read_frame >= self.current_range_end_frame:
+            if self.main_app.loop_enabled:
+                if not self._seek_pyav_playback(self.current_playback_start_frame):
+                    self.stop_playback()
+                    return
+            else:
+                self.stop_playback()
+                return
+
+        self.display_frame(frame_bgr)
+
+        # Update slider (block signals to avoid re-triggering scrub)
+        self.main_app.slider.blockSignals(True)
+        self.main_app.slider.setValue(actual_read_frame)
+        self.main_app.slider.blockSignals(False)
+
+        self.main_app.update_current_frame_label(
+            actual_read_frame, self.main_app.frame_count, self.current_fps
+        )
 
     def stop_playback(self):
         """Stops any active playback timer and resets transient playback flags.
 
         Note: ``loop_enabled`` is intentionally NOT reset here because it is a
         persistent user preference controlled by the loop toggle button.
+        The PyAV playback container is kept open so that restarting playback
+        on the same video skips the ``av.open()`` overhead.
         """
         was_active = self.playback_timer.isActive()
         if was_active:
@@ -661,6 +787,7 @@ class VideoEditor:
         self.main_app.is_playing = False
         self.is_playing_range = False
         self.current_range_end_frame = -1
+        # Keep _pyav_play_container alive for quick restart
 
     def next_clip(self):
         """

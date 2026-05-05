@@ -224,3 +224,20 @@ This is MSMF's COM session flush-and-rebuild overhead, not decode-and-discard.
   - `cleanup()` now gracefully stops both `_seek_thread` and `_thumb_thread`.
 
 - **`requirements.txt`**: added `av==17.0.1`.
+
+## [2026-05-05]
+### Bug Fixes
+Fixing bugs introduced in the previous update PyAV Seek Engine Migration:
+
+- **Hover thumbnail no longer persists after leaving the slider** (`video_cropper.py` — `eventFilter`; `video_editor.py` — `_on_thumbnail_ready`):
+  The `Leave` event on the slider was already calling `thumbnail_label.hide()`, but it did **not** clear `_pending_thumb_slider_pos` or stop the 50 ms debounce timer.  Because thumbnail decoding is off-thread (`PyAVThumbnailWorker`), the worker could complete its seek *after* the mouse had left, arrive on the main thread via a queued connection, find `_pending_thumb_slider_pos is not None`, and re-show the label — making it appear permanently visible.  The fix: the `Leave` handler now also calls `_thumb_debounce_timer.stop()` and sets `_pending_thumb_slider_pos = None` so any in-flight or pending thumbnail callback is a no-op.
+
+- **Adding a new range is now instantaneous** (`video_cropper.py` — `select_range`, `update_start_frame_input`):
+  Both methods were calling `editor.update_frame_display(start_frame)` — a **blocking** synchronous `cv2.VideoCapture.set()` + `.read()` on the main UI thread.  On MSMF this costs ~300–640 ms per call, making every "Add Range" and Start-Frame edit feel sluggish.  Both call sites are now replaced with `editor.request_seek(start_frame)` (the async `PyAVSeekWorker` path), and the slider is updated separately with signals blocked.
+
+- **Playback speed setting is now correctly applied** (`video_cropper.py` — `update_playback_speed`):
+  `QTimer.setInterval()` on a *running* timer in Qt6 updates the timer's `interval()` property but the new interval does **not** take effect until the *next* scheduled timeout fires — meaning a speed change mid-playback could take up to one full old-interval to become visible.  The fix replaces `setInterval()` with `stop()` + `start(new_interval)`, which forces the updated rate to apply immediately.  Additionally, `interval` is now guarded with `max(1, …)` to prevent a zero-interval timer if speed is extremely high.
+
+### Changes
+- **`clip_length_label` now displays video FPS** as well as clip length and video length. Useful to know if you are dealing with videos of different fps.
+

@@ -444,7 +444,7 @@ class VideoCropper(QWidget):
         right_panel.addWidget(self.slider)
 
         clip_length_layout = QHBoxLayout()
-        self.clip_length_label = QLabel("Clip Length: 0 frames | Video Length: 0 frames")
+        self.clip_length_label = QLabel("Clip Length: 0 frames | Video Length: 0 frames | FPS: -")
         clip_length_layout.addWidget(self.clip_length_label)
         
         clip_length_layout.addStretch()
@@ -1004,7 +1004,7 @@ class VideoCropper(QWidget):
         # Re-layout and trigger frame redraw to fit available window space 
         if self.tabs.parentWidget() and self.tabs.parentWidget().layout():
             self.tabs.parentWidget().layout().invalidate()
-        QTimer.singleShot(25, lambda: self.editor.update_frame_display(self.slider.value()) if getattr(self, 'frame_count', 0) > 0 else None)
+        QTimer.singleShot(25, lambda: self.editor.request_seek(self.slider.value()) if getattr(self, 'frame_count', 0) > 0 else None)
 
     def toggle_workflow_labels(self, checked):
         if checked:
@@ -1219,10 +1219,21 @@ class VideoCropper(QWidget):
             QMessageBox.critical(self, "Error", f"Failed to delete video: {e}")
 
     def update_playback_speed(self):
+        """
+        Updates the playback timer interval to honour the current speed setting.
+
+        In Qt6, ``QTimer.setInterval()`` alone does not immediately affect a
+        running timer — the change only takes effect after the current timeout
+        fires.  Calling ``stop()`` then ``start(new_interval)`` forces the new
+        rate to apply right away without missing a beat.
+        """
         if self.editor.playback_timer.isActive():
             speed = self.playback_speed_spinner.value()
-            interval = int((1000 / self.editor.current_fps) / speed) if self.editor.current_fps > 0 else int(33 / speed)
-            self.editor.playback_timer.setInterval(interval)
+            fps = self.editor.current_fps
+            interval = max(1, int((1000 / fps) / speed)) if fps > 0 else max(1, int(33 / speed))
+            # stop()+start() ensures the new interval takes effect immediately.
+            self.editor.playback_timer.stop()
+            self.editor.playback_timer.start(interval)
 
     def decrease_playback_speed(self):
         current = self.playback_speed_spinner.value()
@@ -1291,21 +1302,27 @@ class VideoCropper(QWidget):
             )
 
     def jump_to_range_start(self):
+        """Jumps the slider and frame view to the start frame of the selected range."""
         if not self.current_selected_range_id: return
         try:
             start_frame = int(self.start_frame_input.text())
             if self.frame_count > 0:
-                self.editor.update_frame_display(start_frame)
+                self.slider.blockSignals(True)
                 self.slider.setValue(start_frame)
+                self.slider.blockSignals(False)
+                self.editor.request_seek(start_frame)
         except ValueError: pass
 
     def jump_to_range_end(self):
+        """Jumps the slider and frame view to the end frame of the selected range."""
         if not self.current_selected_range_id: return
         try:
             end_frame = int(self.end_frame_input.text())
             if self.frame_count > 0:
-                self.editor.update_frame_display(end_frame)
+                self.slider.blockSignals(True)
                 self.slider.setValue(end_frame)
+                self.slider.blockSignals(False)
+                self.editor.request_seek(end_frame)
         except ValueError: pass
 
     def set_range_start_to_current(self):
@@ -1386,8 +1403,11 @@ class VideoCropper(QWidget):
             if current_item:
                 self._update_list_item_text(current_item, range_data)
 
-            # Update frame display and slider to the new start
-            self.editor.update_frame_display(new_start)
+            # Update frame display and slider to the new start (async: no UI freeze).
+            self.slider.blockSignals(True)
+            self.slider.setValue(new_start)
+            self.slider.blockSignals(False)
+            self.editor.request_seek(new_start)
 
             print(f"Nudged start for {self.current_selected_range_id}: New Range [{new_start}-{new_end}]")
 
@@ -1411,12 +1431,25 @@ class VideoCropper(QWidget):
         except ValueError: pass
 
     def eventFilter(self, source, event):
+        """
+        Handles mouse events on the playback slider for hover-thumbnail display.
+
+        On ``HoverMove``: queues a thumbnail render for the hovered position.
+        On ``Leave``:  hides the thumbnail AND cancels any pending async
+            thumbnail request so the background worker cannot re-show the label
+            after the cursor has already left the slider area.
+        """
         if source is self.slider:
             if event.type() == QMouseEvent.Type.MouseButtonPress:
                 pass
             elif event.type() == QMouseEvent.Type.HoverMove:
-                self.editor.show_thumbnail(event) # show_thumbnail might need update?
+                self.editor.show_thumbnail(event)
             elif event.type() == QMouseEvent.Type.Leave:
+                # Stop the debounce timer so no deferred seek is dispatched.
+                self.editor._thumb_debounce_timer.stop()
+                # Clear the pending position so _on_thumbnail_ready is a no-op
+                # if the async worker finishes after the cursor has left.
+                self.editor._pending_thumb_slider_pos = None
                 self.thumbnail_label.hide()
         return False
 
@@ -1546,15 +1579,15 @@ class VideoCropper(QWidget):
             duration = end_frame - start_frame
             self.duration_input.setText(str(duration))
             self.end_frame_input.setText(str(end_frame))
-            self._load_range_crop(range_data) # Load visual crop
+            self._load_range_crop(range_data)  # Load visual crop
             if self.frame_count > 0:
-                 # Update frame display first
-                 self.editor.update_frame_display(start_frame)
-                 # Update slider value (may trigger scrub_video again, but should be ok)
-                 self.slider.setValue(start_frame)
-            # Update label (using the new method directly)
-            fps = self.cap.get(cv2.CAP_PROP_FPS) if self.cap else 0
-            # self.update_current_frame_label(start_frame, self.frame_count, fps) # update_frame_display handles this
+                # Use the async PyAV worker (non-blocking) instead of the
+                # synchronous cv2 update_frame_display call that was causing
+                # multi-second freezes when MSMF seek latency was high.
+                self.slider.blockSignals(True)
+                self.slider.setValue(start_frame)
+                self.slider.blockSignals(False)
+                self.editor.request_seek(start_frame)
 
             # Clear goto input when selecting a range
             if hasattr(self, 'goto_frame_input'): self.goto_frame_input.clear()
@@ -1636,10 +1669,15 @@ class VideoCropper(QWidget):
             if current_item:
                 self._update_list_item_text(current_item, range_data)
 
-            self.clip_length_label.setText(f"Clip Length: {new_end - new_start} frames | Video Length: {self.frame_count} frames")
+            fps = self.editor.current_fps
+            fps_str = f"{fps:.1f}" if fps > 0 else "-"
+            self.clip_length_label.setText(f"Clip Length: {new_end - new_start} frames | Video Length: {self.frame_count} frames | FPS: {fps_str}")
             if self.frame_count > 0:
-                self.editor.update_frame_display(new_start)
+                # Use async PyAV worker — avoids blocking the UI on MSMF seek.
+                self.slider.blockSignals(True)
                 self.slider.setValue(new_start)
+                self.slider.blockSignals(False)
+                self.editor.request_seek(new_start)
         except ValueError:
             self.start_frame_input.setText(str(range_data.get("start", 0)))
 
@@ -1687,7 +1725,9 @@ class VideoCropper(QWidget):
             if current_item:
                 self._update_list_item_text(current_item, range_data)
 
-            self.clip_length_label.setText(f"Clip Length: {new_end - new_start} frames | Video Length: {self.frame_count} frames")
+            fps = self.editor.current_fps
+            fps_str = f"{fps:.1f}" if fps > 0 else "-"
+            self.clip_length_label.setText(f"Clip Length: {new_end - new_start} frames | Video Length: {self.frame_count} frames | FPS: {fps_str}")
         except ValueError:
             self.end_frame_input.setText(str(range_data.get("end", 60)))
 
@@ -1726,7 +1766,9 @@ class VideoCropper(QWidget):
             if current_item:
                 self._update_list_item_text(current_item, range_data)
 
-            self.clip_length_label.setText(f"Clip Length: {new_end - start_frame} frames | Video Length: {self.frame_count} frames")
+            fps = self.editor.current_fps
+            fps_str = f"{fps:.1f}" if fps > 0 else "-"
+            self.clip_length_label.setText(f"Clip Length: {new_end - start_frame} frames | Video Length: {self.frame_count} frames | FPS: {fps_str}")
         except ValueError:
             old_duration = range_data.get("end", start_frame) - range_data.get("start", start_frame)
             self.duration_input.setText(str(old_duration))
@@ -1843,7 +1885,7 @@ class VideoCropper(QWidget):
             self.start_frame_input.setText("-")
             self.duration_input.setText("-")
             self.clear_crop_region_controller()
-            self.clip_length_label.setText("Clip Length: 0 frames | Video Length: ...")
+            self.clip_length_label.setText("Clip Length: 0 frames | Video Length: ... | FPS: -")
 
     def clear_current_range_crop(self):
         if not self.current_selected_range_id:

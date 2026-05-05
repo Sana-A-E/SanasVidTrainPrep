@@ -147,7 +147,7 @@ class VideoLoader:
              self.main_app.current_video_original_path = None
              # Clear UI elements associated with video loading
              self.main_app.slider.setEnabled(False)
-             self.main_app.clip_length_label.setText("Clip Length: 0 frames | Video Length: 0 frames")
+             self.main_app.clip_length_label.setText("Clip Length: 0 frames | Video Length: 0 frames | FPS: -")
              self.main_app.clip_range_list.clear()
              self.main_app.start_frame_input.setText("0")
              self.main_app.end_frame_input.setText("0")
@@ -158,8 +158,10 @@ class VideoLoader:
              return
         else:
              # Update total length label now that frame_count is known
+             fps = self.main_app.editor.current_fps
+             fps_str = f"{fps:.1f}" if fps > 0 else "-"
              self.main_app.clip_length_label.setText(
-                 f"Clip Length: ... frames | Video Length: {self.main_app.frame_count} frames"
+                 f"Clip Length: ... frames | Video Length: {self.main_app.frame_count} frames | FPS: {fps_str}"
              )
              # Keep the trim spinner's maximum in sync with the loaded video's frame count
              if hasattr(self.main_app, 'trim_frame_spinner'):
