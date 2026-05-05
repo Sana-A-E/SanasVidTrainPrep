@@ -1907,18 +1907,31 @@ class VideoCropper(QWidget):
             print(f"⚠️ Could not find range {self.current_selected_range_id} to clear crop data.")
 
     def toggle_play_selected_range(self):
-        """Starts or stops playback of the currently selected range."""
+        """Starts or stops playback of the currently selected range.
+
+        Start-frame logic:
+        - If the current slider position falls *within* ``[start, end)``,
+          playback begins from that position (natural continuation).
+        - Otherwise playback begins from the range's ``start`` frame.
+        """
         if not self.current_selected_range_id:
             QMessageBox.warning(self, "No Range Selected", "Please select a range to play.")
             return
-            
+
         range_data = self.find_range_by_id(self.current_selected_range_id)
         if not range_data:
             print("⚠️ Cannot play range: Data not found.")
             return
-            
-        print(f"Toggling playback for range: {range_data['start']} - {range_data['end']}")
-        self.editor.toggle_range_playback(range_data['start'], range_data['end'])
+
+        r_start  = range_data['start']
+        r_end    = range_data['end']
+        current  = self.slider.value()
+
+        # Honour the user's current viewing position when within the range.
+        play_from = current if r_start <= current < r_end else r_start
+        print(f"Toggling range playback: [{r_start}-{r_end}], playing from frame {play_from}")
+        self.editor.toggle_range_playback(r_start, r_end, play_from=play_from)
+
 
     # --- Range Data Helper --- 
     def find_range_by_id(self, range_id):

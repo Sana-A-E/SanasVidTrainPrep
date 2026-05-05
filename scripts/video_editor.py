@@ -579,28 +579,47 @@ class VideoEditor:
 
     def _seek_pyav_playback(self, frame_number: int) -> bool:
         """
-        Seeks the playback container to the nearest I-frame at or before
-        ``frame_number`` and resets the sequential frame iterator.
+        Seeks the playback container to ``frame_number`` and positions the
+        sequential frame iterator so that ``next(_pyav_play_iter)`` returns
+        exactly the frame at ``frame_number`` (or the first frame at or after
+        it if the exact PTS cannot be matched).
 
-        Uses ``container.seek()`` with ``backward=True`` — same strategy as
-        ``PyAVSeekWorker`` (~56 ms avg vs ~640 ms for MSMF).
+        Strategy — identical to ``PyAVSeekWorker._decode_frame``:
+        1. ``container.seek()`` jumps to the nearest I-frame at or before
+           ``frame_number`` (fast, O(log n) index lookup).
+        2. Iterate forward through the decoder until the target PTS is reached.
+        3. Prepend that frame back onto the iterator with ``itertools.chain``
+           so that ``_playback_step`` receives it as the very first yield.
 
         Args:
             frame_number (int): Zero-based target frame index.
 
         Returns:
-            bool: True if the seek succeeded and the iterator was reset.
+            bool: True if the seek succeeded and the iterator was positioned.
         """
+        import itertools
         if self._pyav_play_container is None:
             return False
         try:
             target_pts = int(frame_number / self._pyav_play_fps / self._pyav_play_tb)
+            _PTS_TOLERANCE = 2   # match PyAVSeekWorker._PTS_TOLERANCE
             self._pyav_play_container.seek(
                 target_pts,
                 stream=self._pyav_play_stream,
                 backward=True,
                 any_frame=False,
             )
+            raw_iter = self._pyav_play_container.decode(self._pyav_play_stream)
+            # Advance until we reach the target PTS, then chain the found frame
+            # back onto the iterator so _playback_step sees it first.
+            for av_frame in raw_iter:
+                if av_frame.pts is None:
+                    continue
+                if av_frame.pts >= target_pts - _PTS_TOLERANCE:
+                    self._pyav_play_iter = itertools.chain([av_frame], raw_iter)
+                    return True
+            # Fell off the end without finding the frame — start from whatever
+            # the seek landed on (I-frame).
             self._pyav_play_iter = self._pyav_play_container.decode(self._pyav_play_stream)
             return True
         except Exception as e:
@@ -620,8 +639,16 @@ class VideoEditor:
             print("Stopping normal playback...")
             self.stop_playback()
             
-    def toggle_range_playback(self, start_frame, end_frame):
-        """Starts or stops playback limited to the given start/end frames."""
+    def toggle_range_playback(self, start_frame, end_frame, play_from=None):
+        """Starts or stops playback limited to the given start/end frames.
+
+        Args:
+            start_frame (int): Inclusive start of the range (used as loop-back point).
+            end_frame (int): Exclusive end of the range.
+            play_from (int | None): Frame to actually begin playing from.  When
+                ``None`` playback begins from ``start_frame``.  Callers can pass
+                a mid-range value to resume from the current slider position.
+        """
         if self.is_playing_range:  # Already playing this range — stop it
             print("Stopping range playback...")
             self.stop_playback()
@@ -629,27 +656,33 @@ class VideoEditor:
             if self.main_app.is_playing:  # Stop normal playback before starting range playback
                 print("Stopping normal playback before starting range playback...")
                 self.stop_playback()
-            self._start_playback(range_playback=True, start_frame=start_frame, end_frame=end_frame)
+            self._start_playback(
+                range_playback=True,
+                start_frame=start_frame,
+                end_frame=end_frame,
+                play_from=play_from,
+            )
 
-    def _start_playback(self, range_playback=False, start_frame=None, end_frame=None):
+    def _start_playback(self, range_playback=False, start_frame=None, end_frame=None, play_from=None):
         """
         Begins the playback timer using a dedicated PyAV sequential-read
         container so the main thread is never blocked by MSMF seeking.
 
         Strategy:
         - Open (or reuse) a PyAV container for the current video.
-        - Seek to ``start_frame`` via PyAV (avg ~56 ms vs ~640 ms for MSMF).
+        - Seek to the target frame via PyAV (avg ~56 ms vs ~640 ms for MSMF).
         - Iterate frames sequentially in ``_playback_step`` — no seeking needed
           between frames, so each step is just one H.264/HEVC frame decode.
 
         Args:
             range_playback (bool): If True, confine playback to [start_frame, end_frame).
-            start_frame (int | None): First frame for range playback.
-            end_frame (int | None): Exclusive last frame for range playback.
+            start_frame (int | None): Inclusive range start (also the loop-back point).
+            end_frame (int | None): Exclusive range end.
+            play_from (int | None): Frame to actually seek to before starting;
+                defaults to ``start_frame`` for range playback and to
+                ``slider.value()`` for normal playback.
 
-        Looping behaviour (for both modes) is controlled by
-        ``self.main_app.loop_enabled`` — a passive flag set by the UI toggle
-        button.  ``_playback_step`` checks this flag at the end of each mode.
+        Looping behaviour is controlled by ``self.main_app.loop_enabled``.
         """
         if not self.main_app.cap or not self.main_app.cap.isOpened():
             print("Cannot start playback: Video not ready.")
@@ -662,7 +695,7 @@ class VideoEditor:
 
         # Determine start/end frame boundaries
         self.current_playback_start_frame = 0
-        self.current_playback_end_frame = self.main_app.frame_count  # Default: full video
+        self.current_playback_end_frame = self.main_app.frame_count
         playback_mode_msg = "normal"
 
         if range_playback:
@@ -678,9 +711,16 @@ class VideoEditor:
         else:  # Normal playback — start from current slider position
             self.current_playback_start_frame = self.main_app.slider.value()
 
+        # Resolve the actual first frame to decode/display.
+        if play_from is None:
+            seek_to = self.current_playback_start_frame
+        else:
+            seek_to = max(self.current_playback_start_frame,
+                          min(play_from, self.current_playback_end_frame - 1))
+
         loop_hint = " [looping]" if self.main_app.loop_enabled else ""
-        print(f"Starting {playback_mode_msg}{loop_hint} playback from "
-              f"{self.current_playback_start_frame} to {self.current_playback_end_frame}")
+        print(f"Starting {playback_mode_msg}{loop_hint} playback from frame {seek_to} "
+              f"(range [{self.current_playback_start_frame}-{self.current_playback_end_frame}])")
 
         # ── Open PyAV playback container (if not already open for this video) ──
         if self._pyav_play_container is None:
@@ -689,8 +729,8 @@ class VideoEditor:
                 self.stop_playback()
                 return
 
-        # ── Seek PyAV container to start frame (~56 ms, no UI freeze) ──────────
-        if not self._seek_pyav_playback(self.current_playback_start_frame):
+        # ── Seek PyAV container to the target frame (~56 ms, no UI freeze) ────
+        if not self._seek_pyav_playback(seek_to):
             print(f"Cannot start playback: PyAV seek to frame "
                   f"{self.current_playback_start_frame} failed.")
             self.stop_playback()
